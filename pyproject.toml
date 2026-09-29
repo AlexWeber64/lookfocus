@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools==84.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lookfocus"
+version = "0.0.1"
+description = "Windows tray app: move keyboard focus to the monitor you are facing, using the webcam."
+requires-python = "==3.12.*"
+# Direct dependencies, pinned exactly. Full transitive pins live in requirements.lock.
+# mediapipe is deliberately held at 0.10.33: 0.10.35 and later bundle a telemetry uploader
+# (see DECISIONS.md, D-003). Do not bump without re-running tools/net_audit.py.
+# opencv-contrib-python (not opencv-python): mediapipe depends on the contrib build, and
+# installing both puts two conflicting cv2 packages in site-packages.
+dependencies = [
+    "mediapipe==0.10.33",
+    "opencv-contrib-python==5.0.0.93",
+    "numpy==2.5.3",
+    "pystray==0.19.5",
+    "Pillow==12.3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "ruff==0.16.9",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+src = ["src", "tools", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003"]

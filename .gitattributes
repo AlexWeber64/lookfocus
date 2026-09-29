@@ -1,0 +1,5 @@
+* text=auto eol=lf
+*.task binary
+*.png binary
+*.ico binary
+*.ps1 text eol=crlf
