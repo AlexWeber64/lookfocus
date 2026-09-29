@@ -3,7 +3,8 @@
 Look at a monitor and just type: LookFocus uses your webcam to work out which monitor you are facing and moves
 keyboard focus to the window you last used on that monitor. Windows 11, runs from the tray, fully offline.
 
-> Status: **M0 (environment probe) done.** Not usable yet. Full setup, tuning and limitations docs land in M6.
+> Status: **M1 (head pose + debug viewer) done, awaiting hardware check.** Not usable yet. Full setup, tuning
+> and limitations docs land in M6.
 
 ## Privacy
 - Camera frames are processed in memory only: never saved, never logged, never sent anywhere.

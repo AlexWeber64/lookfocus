@@ -287,3 +287,43 @@ def list_cameras(backend: str) -> list[CameraDevice]:
     """Devices for backend "msmf" or "dshow", in OpenCV index order. Empty list on failure."""
     fn = {"msmf": _enum_msmf, "dshow": _enum_dshow}[backend]
     return _in_mta(fn)
+
+
+def device_key(path: str) -> str:
+    """Backend-independent device identity.
+
+    MSMF and DSHOW report the same camera with symbolic links that differ only in the device-interface
+    class GUID segment (e.g. "#{e5323777-…}" vs "#{65e8773d-…}"), so that segment is dropped.
+    """
+    return re.sub(r"#\{[0-9a-f-]{36}\}", "", path.lower())
+
+
+@dataclass(frozen=True)
+class CameraChoice:
+    """Which camera the user asked for; empty = automatic."""
+
+    path: str = ""
+    name: str = ""
+    index: int | None = None
+
+
+def candidate_indices(devices: list[CameraDevice], choice: CameraChoice) -> tuple[list[int], bool]:
+    """(OpenCV indices to try, in order; whether they come from an explicit choice).
+
+    Explicit choice by device path, then name, then raw index. If the chosen device isn't present, fall
+    back to automatic order: devices whose name doesn't suggest IR first. Frame content is checked after
+    opening in any case.
+    """
+    if choice.path:
+        key = device_key(choice.path)
+        hits = [d.index for d in devices if d.path and device_key(d.path) == key]
+        if hits:
+            return hits, True
+    if choice.name:
+        hits = [d.index for d in devices if d.name.casefold() == choice.name.casefold()]
+        if hits:
+            return hits, True
+    if choice.index is not None and not choice.path and not choice.name:
+        return [choice.index], True
+    auto = [d.index for d in devices if not d.looks_ir] + [d.index for d in devices if d.looks_ir]
+    return (auto or [0]), False

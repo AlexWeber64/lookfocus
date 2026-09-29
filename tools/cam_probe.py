@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import statistics
 import sys
 import time
 
@@ -23,7 +24,7 @@ import lookfocus  # noqa: F401  must precede cv2: sets OPENCV_VIDEOIO_MSMF_ENABL
 import cv2
 
 from lookfocus.camera_enum import list_cameras
-from lookfocus.capture import BACKENDS, frame_stats, open_camera
+from lookfocus.capture import BACKENDS, STATIC_MOTION, frame_stats, motion, open_camera, thumbnail
 
 
 def fourcc_str(v: float) -> str:
@@ -38,6 +39,8 @@ def measure(cap: cv2.VideoCapture, seconds: float) -> dict:
     frames = 0
     shape = None
     stats = []
+    motions = []
+    prev = None
     failures = 0
     while time.perf_counter() - t0 < seconds:
         ok, frame = cap.read()
@@ -51,21 +54,36 @@ def measure(cap: cv2.VideoCapture, seconds: float) -> dict:
             t_first = time.perf_counter()
         frames += 1
         shape = frame.shape
+        th = thumbnail(frame)
+        if prev is not None:
+            motions.append(motion(prev, th))
+        prev = th
         if frames % 5 == 1:
             stats.append(frame_stats(frame))
         del frame
     fps = (frames - 1) / (time.perf_counter() - t_first) if first is not None and frames > 1 else 0.0
-    return {"first_s": first, "frames": frames, "fps": fps, "shape": shape, "stats": stats, "fail": failures}
+    motion_med = statistics.median(motions) if motions else None
+    return {
+        "first_s": first,
+        "frames": frames,
+        "fps": fps,
+        "shape": shape,
+        "stats": stats,
+        "motion": motion_med,
+        "fail": failures,
+    }
 
 
-def classify(stats) -> str:
+def classify(stats, motion_med: float | None) -> str:
     if not stats:
         return "no frames"
     grey = sum(s.greyscale for s in stats)
     dark = sum(s.dark for s in stats)
     n = len(stats)
     if dark > n / 2:
-        return "DARK (covered / privacy shutter?)"
+        return "DARK (lens covered / very dark room?)"
+    if motion_med is not None and motion_med < STATIC_MOTION:
+        return "STATIC (placeholder image: software privacy shutter on?)"
     if grey > n / 2:
         return "GREYSCALE (IR sensor? will be skipped)"
     return "colour"
@@ -104,7 +122,7 @@ def probe_one(index: int, backend: str, mode: str, args) -> dict:
             fourcc_str(cap.get(cv2.CAP_PROP_FOURCC)),
         )
         row.update(measure(cap, args.seconds))
-        row["kind"] = classify(row["stats"])
+        row["kind"] = classify(row["stats"], row["motion"])
     finally:
         t = time.perf_counter()
         cap.release()
@@ -126,7 +144,8 @@ def fmt_row(r: dict) -> str:
     parts.append(f"reported={rw}x{rh}@{rfps:g} fourcc={fcc} frame_shape={shape}")
     if r["stats"]:
         s = r["stats"][len(r["stats"]) // 2]
-        parts.append(f"luma={s.mean_luma:.0f} chroma={s.chroma:.1f} -> {r['kind']}")
+        mot = f"{r['motion']:.2f}" if r.get("motion") is not None else "-"
+        parts.append(f"luma={s.mean_luma:.0f} chroma={s.chroma:.1f} motion={mot} -> {r['kind']}")
     else:
         parts.append(f"-> {r['kind']}")
     parts.append(f"read_failures={r['fail']} release={r['release_s']:.2f}s")

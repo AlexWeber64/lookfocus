@@ -35,11 +35,13 @@ py -3.12 -m venv .venv
 # tools
 .venv\Scripts\python.exe tools\cam_probe.py [--compare-set] [--backends msmf,dshow]
 .venv\Scripts\python.exe tools\net_audit.py [--seconds 60 --tail 20]
+.venv\Scripts\python.exe tools\cam_share_test.py        # can a 2nd app use the camera meanwhile?
+.venv\Scripts\python.exe tools\debug_pose.py [--guided]  # live pose viewer; --seconds N auto-quits
 ```
 
 ## Layout
-- `src/lookfocus/` — package (capture, camera_enum, privacy so far; the rest arrives per milestone)
-- `tools/` — dev/debug scripts (cam_probe, net_audit; debug_pose in M1, focus_test in M3)
+- `src/lookfocus/` — package (capture, camera_enum, pose, privacy, paths so far; the rest arrives per milestone)
+- `tools/` — dev/debug scripts (cam_probe, cam_share_test, net_audit, debug_pose; focus_test in M3)
 - `tests/` — pytest; hardware-free except for Windows-only checks that skip elsewhere
 - `models/face_landmarker.task` — committed, sha256-checked (see `models/SOURCE.md`)
 - User data: `%APPDATA%\LookFocus\` (config.json, calibration.json, logs)

@@ -139,3 +139,92 @@ Greyscale means chroma < 1.5 and not dark. A mean luma < 12 is reported as **dar
 ThinkPad privacy shutter) rather than greyscale, so a closed shutter isn't mistaken for an IR camera. A name
 hint (`IR`, `infrared`, `Hello`) is shown too. This camera measured chroma about 35 at luma about 160 (colour).
 The greyscale path is **[unverified]** without an IR device.
+
+Follow-up after the user's M0 checks:
+- The user confirmed Windows Hello face sign-in is set up, so an IR sensor exists. Neither the MSMF
+  (VIDCAP) nor the DSHOW enumeration lists it, so LookFocus never opens it. **[verified]**
+- With this ThinkPad's **software privacy shutter** on, the camera keeps delivering 30 fps of flat grey
+  frames (luma 140, chroma 4.0, down from about 35). It classified as "colour". That's harmless: the face
+  tracker sees no face, so LookFocus goes to no-face mode (switching disabled, low frame rate), which is the
+  right behaviour. To tell the user *why*, cam_probe and the capture thread now also measure frame-to-frame
+  motion: a synthetic placeholder has none (motion < 0.25), while a live sensor has noise even in a dark room
+  (measured 0.29 at luma 2). Whether the shutter image is truly static is **[unverified]** until the user
+  re-runs cam_probe with the shutter on.
+
+## Post-M0 findings
+
+### D-011 The camera is exclusive: a second app gets no frames **[verified]**
+`tools/cam_share_test.py` holds the camera in one process and opens it from a second process:
+
+| holder | second app via | second app's open | second app's frames | holder |
+|---|---|---|---|---|
+| msmf | msmf | "succeeds" (0.49 s) | **0** (79 failed reads in 4 s) | unaffected |
+| msmf | dshow | "succeeds" | 4 blank frames (chroma 0.0) | unaffected |
+| dshow | msmf / dshow | same as above | same | unaffected |
+
+So **while LookFocus holds the camera, a video-call app gets no video** (and vice versa). The Windows Camera
+app failed during the user's test with `0xA00F429F <WindowShowFailed> (0x80070057 E_INVALIDARG)`. That's the
+Camera app failing to create its own window, not a "camera in use" error, so the test was inconclusive and
+cam_share_test replaces it.
+- Windows 11 has a per-camera setting, *Settings → Bluetooth & devices → Cameras → (camera) → Advanced camera
+  options → "Allow multiple apps to use camera at the same time"*, added in 24H2 26100.8524 / 25H2 26200.8524.
+  This machine is on **26200.9457**, so it should be present. Whether it makes both apps get frames is
+  **[unverified]**; the user should enable it and re-run cam_share_test.
+- Built into the capture code regardless:
+  1. **Pause releases the camera** (`CaptureThread.set_paused`), so the pause hotkey frees it for a call.
+  2. An open that "succeeds" but yields no frames within 3 s counts as a failed open, and LookFocus retries
+     with backoff (1, 2, 5, 10, 30 s). Started during a call, it waits quietly instead of hanging, and the
+     retries don't disturb the app that holds the camera (the holder saw 0 failed reads).
+- Open question for the user: should LookFocus **auto-yield** the camera when another app starts using it?
+  The camera privacy store (`HKCU\...\CapabilityAccessManager\ConsentStore\webcam`, per-exe `LastUsedTimeStop
+  == 0` means in use) is a plausible signal. It's keyed by executable path, and whether a *blocked* app
+  registers there is **[unverified]**. It's not in the spec, so it isn't built.
+
+## M1 — head pose and the debug viewer
+
+### D-012 Reading fresh frames: drain the backend's buffer **[verified]**
+Timing successive reads after a pause shows buffered frames: MSMF returns ~2 frames instantly (2–3 ms) and
+then blocks until the next sensor frame; DSHOW returns 1 instantly. Sleeping and then reading once would
+therefore process a frame up to one pause old. `CameraSource.read_fresh()` calls `grab()` until one takes
+longer than 8 ms (i.e. came from the sensor), at most 4 times, then `retrieve()`s it. The capture loop sleeps
+until the next frame is due (15 fps active, 2.5 fps after 3 s without a face) and then reads fresh.
+Other measurements on this camera (dark room, so auto-exposure was slow):
+- MSMF ignores a 15 fps request in the open params and still delivers 30 fps; DSHOW ran at 15 fps in the dark.
+- Reading alone at 30 fps costs 11–17% of one core on MSMF (software colour conversion, since the brief
+  mandates HW transforms off) and about 4% on DSHOW.
+- Capture thread, no face (dark), 15 fps: **34.7% of one core = 4.3% of the machine** (8 logical CPUs).
+  No-face idle mode (~3 fps): 7.3% of one core = 0.9%. Numbers with a face tracked come in M1 hardware
+  testing and M4.
+
+### D-013 Pose estimators: sign-agnostic, three candidates side by side **[unit-tested; hardware pending]**
+- The matrix layout is detected per matrix from which of the last row/column is (0,0,0,1). mediapipe
+  0.10.33's `MatrixC.to_numpy()` claims to return row-major, but that isn't relied on. Scale/shear is removed
+  by taking the nearest rotation (SVD).
+- **matrix** yaw/pitch come from the face model's depth (z) axis, flipped into the camera's +z half-space
+  before `atan2`. A face always points roughly along the camera axis with an unknown sign, so this is
+  continuous around frontal (never wraps at ±180°) under any axis sign convention. For R = Ry·Rx·Rz it
+  equals the Y-X-Z Euler yaw/pitch, which by construction ignore roll. Roll = Euler roll folded into
+  (−90°, 90°]; its sign is convention-dependent, and that's fine because it's diagnostic only. Tests cover
+  both model-side and camera-side (OpenGL vs OpenCV) convention flips.
+- **lm3d**: the same angles from a face frame built from 3D landmarks (cheek 234→454, chin 152→forehead 10),
+  independent of the matrix. This is the planned fallback if matrix pitch misbehaves.
+- **lm2d**: unitless ratios of where the nose tip (1) sits between the cheeks and between the nasion (168) and
+  chin (152). No depth needed.
+- The classifier never assumes signs: calibration records whatever each estimator produces per monitor.
+  **Which estimator feeds the classifier is decided from the user's guided check** in `debug_pose.py`
+  (per-estimator span, SNR, crosstalk, tilt leak, repeatability).
+
+### D-014 Capture thread **[verified without a face; with a face pending]**
+- `CaptureThread` owns camera and tracker and publishes a `PoseSample` per processed frame to a
+  `LatestSlot` (one value, overwritten, with a condition variable so readers wait for something newer;
+  never a queue, so stale poses are dropped). Statuses: opening, tracking, lost (no face for < 3 s,
+  still 15 fps), no_face (3 s+, 2.5 fps), error (with backoff retry), paused (camera released), stopped.
+  Verified in a headless run: opening → lost → no_face at ~3 s → frame rate converging to ~3 fps;
+  pause → camera released; resume → reopened; stop → thread exits.
+- `FaceTracker` runs `privacy.verify_runtime()` (mediapipe network-import check plus model hash) before
+  mediapipe's native library loads, and refuses to start if either fails.
+- The camera choice is stored as device path / name / index. `device_key()` strips the interface-class GUID
+  so a path recorded under MSMF matches the same device under DSHOW. If a configured camera is missing,
+  LookFocus falls back to automatic choice (IR-named devices last) and says so.
+- If the image explains a missing face, a hint is attached: "dark (lens covered or lights off?)" or "frozen
+  (software privacy shutter on?)".

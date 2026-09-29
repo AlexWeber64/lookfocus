@@ -14,6 +14,8 @@ import hashlib
 import struct
 from pathlib import Path
 
+from lookfocus.paths import MODEL_PATH
+
 NETWORK_DLLS = frozenset(
     {
         "ws2_32.dll",
@@ -28,8 +30,6 @@ NETWORK_DLLS = frozenset(
     }
 )
 
-ROOT = Path(__file__).resolve().parents[2]
-MODEL_PATH = ROOT / "models" / "face_landmarker.task"
 MODEL_SHA256 = "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff"
 
 
@@ -95,3 +95,28 @@ def network_linked_libs(paths: list[Path]) -> dict[Path, set[str]]:
 
 def model_sha256(path: Path = MODEL_PATH) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+class PrivacyError(RuntimeError):
+    pass
+
+
+def verify_runtime(model_path: Path = MODEL_PATH) -> None:
+    """Refuse to run vision with a network-capable mediapipe build or an unexpected model file.
+
+    Called before mediapipe is imported. Costs ~50 ms (reads the ~28 MB native library once).
+    """
+    libs = mediapipe_native_libs()
+    if not libs:
+        raise PrivacyError("mediapipe native library not found")
+    bad = network_linked_libs(libs)
+    if bad:
+        names = ", ".join(f"{p.name}: {sorted(d)}" for p, d in bad.items())
+        raise PrivacyError(
+            f"installed mediapipe links network APIs ({names}); this build can send telemetry. "
+            "Reinstall the pinned version: pip install -r requirements.lock (see DECISIONS.md D-003)."
+        )
+    if not model_path.exists():
+        raise PrivacyError(f"model file missing: {model_path}")
+    if model_path == MODEL_PATH and model_sha256(model_path) != MODEL_SHA256:
+        raise PrivacyError(f"model file {model_path} does not match the recorded SHA-256 (models/SOURCE.md)")
