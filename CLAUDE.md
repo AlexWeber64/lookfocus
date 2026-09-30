@@ -32,6 +32,11 @@ py -3.12 -m venv .venv
 .venv\Scripts\python.exe -m ruff check .
 .venv\Scripts\python.exe -m ruff format --check .
 
+# app (M2+)
+.venv\Scripts\lookfocus.exe calibrate --zones 2     # or: python -m lookfocus calibrate
+.venv\Scripts\lookfocus.exe watch
+.venv\Scripts\lookfocus.exe camera-sharing
+
 # tools
 .venv\Scripts\python.exe tools\cam_probe.py [--compare-set] [--backends msmf,dshow]
 .venv\Scripts\python.exe tools\net_audit.py [--seconds 60 --tail 20]
@@ -40,7 +45,9 @@ py -3.12 -m venv .venv
 ```
 
 ## Layout
-- `src/lookfocus/` — package (capture, camera_enum, pose, privacy, paths so far; the rest arrives per milestone)
+- `src/lookfocus/` — package. Pure (no Win32/cv2, unit-tested): pose, displays, calibration, classifier,
+  the policy parts of camera_usage. Windows: monitors, overlay, camera_enum, camera_sharing, capture,
+  calibrator. CLI: main (`python -m lookfocus`).
 - `tools/` — dev/debug scripts (cam_probe, cam_share_test, net_audit, debug_pose; focus_test in M3)
 - `tests/` — pytest; hardware-free except for Windows-only checks that skip elsewhere
 - `models/face_landmarker.task` — committed, sha256-checked (see `models/SOURCE.md`)

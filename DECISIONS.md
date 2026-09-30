@@ -315,3 +315,75 @@ Headless capture thread, face tracked for 20 s: **70.5% of one core = 8.8% of 8 
 without a face showed a ~3 ms `mp.Image` construction cost, ~0.8 ms `cvtColor`, and MSMF's 30 fps software
 colour conversion (11–17% of a core). Options to measure in M4 with a face present: process at 10–12 fps
 (a 300 ms dwell still gets 3–4 samples), cheaper DSHOW reads, and cutting per-frame copies.
+
+## M2 — calibration and classifier
+
+### D-018 Logical displays and monitor identity **[verified on one monitor; multi-monitor untested]**
+- `displays.build_displays()` (pure) turns monitors into logical displays ordered left to right.
+  `--zones N` (N ≥ 2) splits the **primary** monitor into N side-by-side strips with integer boundaries that
+  cover it exactly; other monitors stay whole. With one display and no zones, LookFocus prints a warning
+  suggesting `--zones 2` and exits with code 2.
+- Monitor identity is `<monitor device path>|<W>x<H>@<x>,<y>` (the brief: "device name, resolution and
+  position"). The device path comes from `QueryDisplayConfig`/`DisplayConfigGetDeviceInfo`
+  (`monitorDevicePath`), which is stable per monitor and port, unlike the `\.\DISPLAYn` GDI names, which
+  Windows can renumber. The GDI name is the fallback. A zone id appends `#zone<i>of<N>`, so changing the zone
+  count also counts as a layout change.
+- Per-monitor-v2 DPI awareness is set first thing in every command (`SetProcessDpiAwarenessContext(-4)`,
+  with fallbacks). Verified: the built-in 2880×1800 panel reports physical rects at 192 DPI (200%). The
+  internal panel has no friendly name, so it's labelled "built-in display".
+- Window-to-display mapping (for M3/M4) is by window centre: the containing display, else the nearest one
+  (a centre just off-screen).
+
+### D-019 Calibration procedure **[verified with a synthetic closed loop; real head pending]**
+- Five dots per display: centre, and 6% / 8% in from the left/right and top/bottom edges (fully visible
+  and away from rounded corners and the taskbar). Each dot: 0.9 s to settle (the dot is yellow), then 2 s of
+  collection (green, with a progress bar), about 30 samples at 15 fps.
+- Per dot and per axis: median, then drop samples more than 3 robust sd (1.4826·MAD) away, then median
+  again. A dot is redone (up to 2 retries) if fewer than 12 samples had a face, or if the robust sd exceeds
+  4°. The user is told why on the overlay.
+- Medians are stored for every estimator (matrix, lm3d, lm2d), so `pose_source` can change without
+  recalibrating. JSON with version, zones and per-dot n/spread, written atomically (temp file +
+  `os.replace`) to `%APPDATA%\LookFocus\calibration.json`.
+- Layout change: `Calibration.check_layout()` diffs the calibrated display ids against the current ones.
+  `watch` lists missing/new displays and tells the user to recalibrate (M5 will prompt from the tray, and
+  M4 will react to `WM_DISPLAYCHANGE`).
+- The calibration explicitly asks users to turn their head "naturally, as you would when working
+  there". LookFocus tracks head pose, not eyes, so calibrating with exaggerated turns (or eyes only) would
+  mismatch real use.
+- The camera-sharing setup step (D-015) runs first unless `--skip-camera-sharing` is given.
+- Closed-loop test: a synthetic "user" thread publishes the pose matching whatever dot the overlay shows. The
+  full flow (both zones, 5 dots each, save/load, classify, layout check) completed in 12.1 s with short
+  timings.
+
+### D-020 Classifier: nearest calibrated centroid + region-based "none" **[unit-tested]**
+- **Binding requirement honoured:** nearest centroid with normalized distance. Every calibration dot's
+  median is a prototype for its display. With edge dots, the boundary between two adjacent displays is the
+  bisector between one's edge dot and the neighbour's, i.e. at the bezel, even for displays of very
+  different sizes. A test shows plain centre-to-centre classification would be wrong there.
+- Normalization per axis: max(pooled calibration noise, 3% of the dots' extent on that axis). Pure noise
+  normalization would let pitch (noise 0.2°) swamp yaw (noise ~1°); the extent floor keeps both axes
+  comparable and works for unitless estimators.
+- **"none"**: each display's region is the least-squares affine map from screen fraction to pose fitted to
+  its 5 dots, applied to the whole rectangle. A pose more than `none_margin` (default 6 normalized units,
+  ~6–12°) outside **every** region is "none". A threshold on the distance to the nearest centroid can't
+  do this well, because a pose in a large display's corner is legitimately far from all its dots. Displays
+  with fewer than 3 usable dots fall back to "distance beyond the farthest dot".
+- Results carry per-display distances (for M4's hysteresis) and the position within the chosen display.
+- Tests: centres, edges and corners; the bezel boundary; unequal sizes; vertically stacked displays; three
+  noisy zones; "none" far below, to the side, and just outside; margin units; yaw/pitch sign flips give
+  identical results (no sign conventions); NaN; degenerate displays.
+
+### D-021 Calibration overlay **[verified on this machine]**
+Raw Win32 via ctypes: a `WS_POPUP` topmost tool window (no taskbar button) sized to the logical display in
+physical pixels, double-buffered GDI, sizes scaled by `GetDpiForWindow`, pointer hidden over it. It runs on
+the main thread, pumped by the calibration loop (`MsgWaitForMultipleObjects`, no GUI thread, no busy loop).
+Verified by reading back pixels of its own window on both zones (white dot core, background colour
+elsewhere). `SetForegroundWindow` for the overlay was refused when launched from a console (foreground lock),
+so the overlay text says **Ctrl+C in the terminal** cancels (Esc works if the overlay has focus).
+
+### D-022 Separability check after calibration **[unit-tested]**
+Leave-one-out over *all* dots is wrong here: adjacent displays' edge dots always sit close together across
+the bezel, so it flagged a perfectly good synthetic calibration. The check instead reports centre-to-centre
+distances and flags a problem when (a) a display's centre, left out, is classified onto another display,
+(b) it lies inside another display's region, or (c) two centres are less than 6× the calibration noise apart
+(this catches "calibrated with the eyes, not the head": synthetic centres 1.0° apart = 2.2× noise → flagged).

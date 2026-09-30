@@ -1,0 +1,231 @@
+"""LookFocus command line.
+
+    lookfocus calibrate [--zones N]      optional camera-sharing setup step, then dots on each display
+    lookfocus watch [--zones N]          print "facing: <display>" live
+    lookfocus camera-sharing             check / set up Windows' multi-app camera setting
+
+(The tray app arrives in M5.) Run from the venv: `.venv\\Scripts\\lookfocus.exe ...` or `python -m lookfocus`.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import logging
+import sys
+from pathlib import Path
+
+from lookfocus import calibration as C
+from lookfocus import paths
+from lookfocus.displays import LayoutError, LogicalDisplay, build_displays, require_multiple
+
+log = logging.getLogger("lookfocus")
+POSE_SOURCES = ("matrix", "lm3d", "lm2d")
+
+
+def _displays(zones: int) -> list[LogicalDisplay]:
+    from lookfocus import monitors
+
+    mode = monitors.enable_dpi_awareness()
+    mons = monitors.list_monitors()
+    log.info("DPI awareness: %s; %d monitor(s)", mode, len(mons))
+    ds = build_displays(mons, zones)
+    require_multiple(ds, zones)
+    return ds
+
+
+def _capture_settings(args, **kw):
+    from lookfocus.capture import CaptureSettings
+
+    return CaptureSettings(backend=args.backend, fallback=not args.no_fallback, **kw)
+
+
+def _print_layout(ds: list[LogicalDisplay]) -> None:
+    for i, d in enumerate(ds, 1):
+        r = d.rect
+        print(f"  {i}. {d.label}: {r.width}x{r.height} at ({r.left},{r.top})")
+
+
+def cmd_calibrate(args) -> int:
+    from lookfocus import camera_sharing
+    from lookfocus import overlay as O
+    from lookfocus.calibrator import Calibrator, CalibratorSettings, Cancelled, separability
+    from lookfocus.capture import CaptureThread, LatestSlot
+
+    ds = _displays(args.zones)
+    print(f"LookFocus calibration: {len(ds)} displays")
+    _print_layout(ds)
+    print()
+    if not args.skip_camera_sharing:
+        camera_sharing.run_setup_step(_capture_settings(args))
+        print()
+    print("Next: a dark screen appears on each display in turn with 5 dots.")
+    print("Look at each dot the way you would when working there (turn your head naturally).")
+    print("Ctrl+C here cancels (Esc also works if the calibration screen has focus).")
+    try:
+        input("Press Enter to start... ")
+    except (EOFError, KeyboardInterrupt):
+        print("\nCancelled.")
+        return 1
+
+    slot = LatestSlot()
+    capture = CaptureThread(_capture_settings(args, probe_sharing=False), slot)
+    capture.start()
+    ov = O.Overlay()
+    try:
+        cal = Calibrator(slot, ov, CalibratorSettings(source=args.pose_source)).run(ds, args.zones)
+    except (Cancelled, KeyboardInterrupt):
+        print("\nCalibration cancelled; nothing saved.")
+        return 1
+    except (TimeoutError, RuntimeError) as e:
+        print(f"\nCalibration failed: {e}")
+        return 1
+    finally:
+        ov.close()
+        capture.stop()
+
+    path = Path(args.calibration)
+    C.save(cal, path)
+    print(f"\nSaved {path}")
+    src = args.pose_source
+    print(f"{'display':<12}{'center h':>10}{'center v':>10}{'width':>9}{'height':>9}{'noise h/v':>13}")
+    for d in cal.displays:
+        by = {p.name: p for p in d.points}
+        c, left, right, top, bot = (by[n].pose[src] for n in ("center", "left", "right", "top", "bottom"))
+        sd = by["center"].spread[src]
+        short = d.label.split(" (")[0]
+        print(
+            f"{short:<12}{c[0]:10.1f}{c[1]:10.1f}{abs(right[0] - left[0]):9.1f}{abs(bot[1] - top[1]):9.1f}"
+            f"{sd[0]:8.2f}/{sd[1]:.2f}"
+        )
+    problems, report = separability(cal, src)
+    print()
+    for line in report:
+        print(f"  {line}")
+    print()
+    if problems:
+        print("Warning: some displays are hard to tell apart by head pose:")
+        for p in problems:
+            print(f"  - {p}")
+        print("Recalibrate turning your head (not just your eyes) toward each display, or use fewer zones.")
+    else:
+        print("All displays are distinguishable. Try `lookfocus watch` next.")
+    return 0
+
+
+def cmd_watch(args) -> int:
+    from lookfocus.capture import CaptureThread, LatestSlot
+    from lookfocus.classifier import Classifier
+
+    cal = C.load(Path(args.calibration))
+    if cal is None:
+        print(f"No calibration at {args.calibration}. Run `lookfocus calibrate` first.")
+        return 1
+    zones = cal.zones if args.zones is None else args.zones
+    ds = _displays(zones)
+    missing, added = cal.check_layout(ds)
+    if missing or added:
+        print("The display layout changed since calibration:")
+        for m in missing:
+            print(f"  - calibrated display not present now: {m}")
+        for a in added:
+            print(f"  - new, uncalibrated display: {a}")
+        print(f"Run `lookfocus calibrate{f' --zones {zones}' if zones else ''}` to recalibrate.")
+        return 1
+    clf = Classifier.from_calibration(cal, args.pose_source, none_margin=args.none_margin)
+    labels = {d.id: d.label for d in ds}
+    print(f"Watching {len(ds)} displays (pose source {args.pose_source}). Ctrl+C to stop.")
+
+    def on_event(kind: str, info: dict) -> None:
+        if kind in ("yielded", "busy"):
+            print(f"[{kind}] {info['title']}: {info['body']}", flush=True)
+        elif kind == "resumed":
+            print("[resumed] camera back", flush=True)
+
+    slot = LatestSlot()
+    capture = CaptureThread(_capture_settings(args), slot, on_event=on_event)
+    capture.start()
+    last = None
+    seen = 0
+    try:
+        while capture.is_alive():
+            seen, s = slot.wait_newer(seen, 1.0)
+            if s is None:
+                continue
+            if s.pose is None:
+                state, detail = f"- ({s.status})", s.message
+            else:
+                r = clf.classify(*s.pose.features(args.pose_source))
+                if r.display is None:
+                    state, detail = "none", f"outside every display by {min(r.outside.values()):.1f}"
+                else:
+                    state = labels.get(r.display, r.display)
+                    fx, fy = r.position if r.position else (float("nan"),) * 2
+                    detail = f"at ({fx:.2f}, {fy:.2f}), distance {r.distance[r.display]:.1f}"
+            if state != last or args.verbose:
+                stamp = dt.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                print(f"{stamp} facing: {state}" + (f"   [{detail}]" if detail else ""), flush=True)
+                last = state
+    except KeyboardInterrupt:
+        pass
+    finally:
+        capture.stop()
+    return 0
+
+
+def cmd_camera_sharing(args) -> int:
+    from lookfocus import camera_sharing
+
+    camera_sharing.run_setup_step(_capture_settings(args))
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(prog="lookfocus", description="Move keyboard focus to the display you face.")
+    ap.add_argument("-v", "--verbose-log", action="store_true", help="debug logging")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    def common(p, zones_default):
+        p.add_argument(
+            "--zones",
+            type=int,
+            default=zones_default,
+            help="split the primary monitor into N side-by-side logical displays",
+        )
+        p.add_argument("--backend", choices=["msmf", "dshow"], default="msmf")
+        p.add_argument("--no-fallback", action="store_true", help="don't try the other camera backend")
+        p.add_argument("--pose-source", choices=POSE_SOURCES, default="matrix")
+        p.add_argument("--calibration", default=str(paths.data_dir() / "calibration.json"))
+
+    p = sub.add_parser("calibrate", help="calibrate head pose for each display")
+    common(p, 0)
+    p.add_argument("--skip-camera-sharing", action="store_true", help="skip the optional camera-sharing step")
+    p.set_defaults(func=cmd_calibrate)
+
+    p = sub.add_parser("watch", help='print "facing: <display>" live')
+    common(p, None)
+    p.add_argument("--none-margin", type=float, default=6.0, help="how far outside all displays is none")
+    p.add_argument("--verbose", action="store_true", help="print every sample, not just changes")
+    p.set_defaults(func=cmd_watch)
+
+    p = sub.add_parser("camera-sharing", help="check Windows' multi-app camera setting")
+    common(p, 0)
+    p.set_defaults(func=cmd_camera_sharing)
+    return ap
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose_log else logging.WARNING,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    try:
+        return args.func(args)
+    except LayoutError as e:
+        print(f"LookFocus: {e}")
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

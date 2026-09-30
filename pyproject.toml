@@ -20,6 +20,9 @@ dependencies = [
     "Pillow==12.3.0",
 ]
 
+[project.scripts]
+lookfocus = "lookfocus.main:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest==9.1.1",
