@@ -41,8 +41,9 @@ _FRIENDLY = {
     "skype": "Skype",
     "webex": "Webex",
     "obs64": "OBS Studio",
-    "windowscamera": "Camera",
-    "systemsettings": "Settings",
+    "windowscamera": "Windows Camera",
+    "systemsettings": "Windows Settings",
+    "explorer": "Windows Explorer",
 }
 
 
@@ -65,6 +66,7 @@ class ActivityPolicy:
     blockers: set[int] = field(default_factory=set)
     baseline: set[int] = field(default_factory=set)  # present when LookFocus got frames: not blocked by it
     ignored: set[int] = field(default_factory=set)  # idle holders / waived by the user
+    _at_open: set[int] = field(default_factory=set)  # present when LookFocus last got frames
     _joined: dict[int, float] = field(default_factory=dict)  # blocker pid -> when it joined
     _streamed: set[int] = field(default_factory=set)
     _clear_since: float | None = None
@@ -72,6 +74,12 @@ class ActivityPolicy:
     def start_holding(self, others: Others) -> None:
         """LookFocus just got frames: whoever else has the camera open isn't being blocked by it."""
         self.baseline = set(others)
+        self._at_open = set(others)
+
+    def sharing_turned_off(self, others: Others) -> None:
+        """A probe found sharing OFF: apps accepted since the open only because sharing was believed on
+        (and not seen streaming) are newcomers again."""
+        self.baseline = (self.baseline & self._at_open) | {p for p in self.baseline if others.get(p)}
 
     def update(self, now: float, others: Others, holding: bool, sharing_on: bool) -> str | None:
         """Returns "yield", "resume" or None."""
@@ -85,6 +93,11 @@ class ActivityPolicy:
             if sharing_on:  # both can stream; nobody to make room for
                 self.baseline |= newcomers
                 return None
+            # A newcomer that streams while LookFocus holds the camera evidently isn't blocked by it
+            # (blocked apps show as "open, not streaming"): accept it rather than yield.
+            streaming_ok = {p for p in newcomers if others[p]}
+            self.baseline |= streaming_ok
+            newcomers -= streaming_ok
             if newcomers:
                 self._enter(now, newcomers)
                 return "yield"

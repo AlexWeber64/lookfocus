@@ -37,6 +37,21 @@ class TestActivityPolicy:
         # and it stays accepted even if the sharing state later reads off
         assert p.update(2.0, {TEAMS: True}, True, sharing_on=False) is None
 
+    def test_streaming_newcomer_is_evidently_not_blocked(self):
+        p = ActivityPolicy()
+        p.start_holding({})
+        assert p.update(1.0, {TEAMS: True}, True, sharing_on=False) is None
+        assert not p.yielded and TEAMS in p.baseline
+
+    def test_sharing_turned_off_rearms_apps_accepted_under_on(self):
+        p = ActivityPolicy()
+        p.start_holding({FIREFOX: False})
+        p.update(1.0, {FIREFOX: False, TEAMS: False, ZOOM: True}, True, sharing_on=True)  # all accepted
+        p.sharing_turned_off({FIREFOX: False, TEAMS: False, ZOOM: True})
+        assert p.baseline == {FIREFOX, ZOOM}  # Firefox was there at open, Zoom is visibly streaming
+        assert p.update(2.0, {FIREFOX: False, TEAMS: False, ZOOM: True}, True, sharing_on=False) == "yield"
+        assert p.blockers == {TEAMS}
+
     def test_no_yield_when_not_holding(self):
         p = ActivityPolicy()
         assert p.update(1.0, {TEAMS: False}, holding=False, sharing_on=False) is None
@@ -126,7 +141,7 @@ class TestNames:
             ("ms-teams.exe", "Microsoft Teams"),
             ("Zoom", "Zoom"),
             (r"C:\Program Files\Google\Chrome\Application\chrome.exe", "Google Chrome"),
-            ("WindowsCamera", "Camera"),
+            ("WindowsCamera", "Windows Camera"),
             ("SomeTool", "SomeTool"),
             ("", "Another app"),
         ],

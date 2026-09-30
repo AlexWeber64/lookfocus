@@ -443,3 +443,23 @@ The D-015 example was wrong: with a long app name ("Microsoft Teams") the full S
 the limit and fell back to the short form. The body is now "<App> started using the camera, so LookFocus
 released it and will resume afterwards." plus the most specific tip that fits: path with camera name →
 path with "(your camera)" → "Settings > Bluetooth & devices > Cameras" → "camera settings".
+
+### D-026 No guessing during the first sharing probe **[verified]**
+User report: with the setting ON, LookFocus released the camera for Windows Camera. The log showed probe
+"on" at 16:19:03.473 and the release logged at .703 "(sharing: on)". The release decision had been taken
+~0.2 s earlier (the log line comes after `release()`, which takes 0.2–0.4 s on MSMF), while the first probe
+of the run was still in flight and the state was UNKNOWN, which was treated as OFF.
+- While the first probe of a run is pending and the state is UNKNOWN, newcomers are **not judged**. The
+  probe thread wakes the capture loop when it finishes, and they're evaluated against the real result
+  (at most ~3 s later). Later reopens use the last known state while their probe runs.
+- A newcomer that is **streaming** while LookFocus holds the camera is accepted outright: with the setting
+  off, blocked apps always showed "open, not streaming", so a streaming one evidently isn't blocked.
+- If a probe flips ON → OFF, apps accepted since the open *only* because sharing was believed on (and not
+  seen streaming) become newcomers again (`ActivityPolicy.sharing_turned_off`). The flag is set by the
+  probe thread and applied on the capture thread, so the policy is only ever touched by one thread.
+- Verified with the setting ON: an app opening 0.8 s after LookFocus (inside the probe window) → deferred →
+  probe ON → no release; both streamed (other app 240 frames). An app opening after the probe → no release
+  (237 frames).
+- Also from the user's run: `explorer.exe` opened the camera briefly during a Windows Camera session (maybe
+  the shell's camera preview or privacy UI). It simply joins the blockers while yielded. Display names:
+  WindowsCamera → "Windows Camera", explorer → "Windows Explorer".

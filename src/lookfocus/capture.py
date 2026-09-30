@@ -409,6 +409,8 @@ class CaptureThread(threading.Thread):
         self._force_resume = False
         self._yield_message = ""
         self._gen = 0  # bumped whenever the camera is opened or released; stale probe results are dropped
+        self._probe_pending = False
+        self._sharing_went_off = False
 
     # --- control (any thread) ---
     def stop(self, timeout: float = 5.0) -> None:
@@ -511,15 +513,21 @@ class CaptureThread(threading.Thread):
             with self._activity_lock:
                 self._own_pids.add(pid)
 
-        state = camera_sharing.probe_while_holding(backend, index, on_child_pid=own)
-        hint = camera_sharing.frame_server_hint(path) if path else None
-        if gen != self._gen:
-            log.info("camera sharing probe discarded: camera was released while it ran")
-            return
-        if state is not Sharing.UNKNOWN:
-            self.sharing = state
-        log.info("camera sharing: %s (probe), MEPSGFlag hint=%s", state.value, hint)
-        self._emit("sharing", state=state.value, hint=hint, available=self.sharing_available)
+        try:
+            state = camera_sharing.probe_while_holding(backend, index, on_child_pid=own)
+            hint = camera_sharing.frame_server_hint(path) if path else None
+            if gen != self._gen:
+                log.info("camera sharing probe discarded: camera was released while it ran")
+                return
+            if state is not Sharing.UNKNOWN:
+                if state is Sharing.OFF and self.sharing is Sharing.ON:
+                    self._sharing_went_off = True  # applied on the capture thread (policy isn't locked)
+                self.sharing = state
+            log.info("camera sharing: %s (probe), MEPSGFlag hint=%s", state.value, hint)
+            self._emit("sharing", state=state.value, hint=hint, available=self.sharing_available)
+        finally:
+            self._probe_pending = False
+            self._wake.set()  # re-evaluate any app that opened the camera while we didn't know yet
 
     def _handle_activity(self, source: CameraSource) -> None:
         """Apply ActivityPolicy to the latest camera activity report."""
@@ -527,6 +535,9 @@ class CaptureThread(threading.Thread):
             force, self._force_resume = self._force_resume, False
         policy = self._policy
         others = self._others(source)
+        if self._sharing_went_off:
+            self._sharing_went_off = False
+            policy.sharing_turned_off(others)
         if force and policy.yielded:
             policy.user_resume(others)
             log.info("camera taken back by the user")
@@ -534,6 +545,10 @@ class CaptureThread(threading.Thread):
             return
         if policy.yielded:
             log.debug("yielded; other processes on the camera (pid: streaming): %s", others)
+        elif self._probe_pending and self.sharing is Sharing.UNKNOWN and source.cap is not None:
+            # First probe of this run still going: don't guess "off" for an app that opens the camera now
+            # (measured race, D-026). It's re-evaluated the moment the probe finishes.
+            return
         blockers_before = set(policy.blockers)
         action = policy.update(self.clock(), others, source.cap is not None, self.sharing is Sharing.ON)
         if action == "yield":
@@ -597,6 +612,7 @@ class CaptureThread(threading.Thread):
                 self._gen += 1
                 self._policy.start_holding(self._others(source))
                 if s.probe_sharing and self.sharing_available:
+                    self._probe_pending = True
                     threading.Thread(
                         target=self._probe_sharing,
                         args=(self._gen, source.backend, source.index, source.path),
