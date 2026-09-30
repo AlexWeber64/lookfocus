@@ -231,7 +231,7 @@ Other measurements on this camera (dark room, so auto-exposure was slow):
 
 ## M1 results and camera sharing (user-requested additions)
 
-### D-015 Camera sharing: detect the setting, offer it at setup, yield when it's off **[mostly verified]**
+### D-015 Camera sharing: detect the setting, offer it at setup, yield when it's off **[detection superseded by D-023]**
 The user asked for: (1) an optional setup step that checks whether this Windows build has "Allow multiple apps
 to use camera at the same time" and offers to turn it on; (2) when another app starts using the camera and the
 setting is off, LookFocus releases the camera and shows a notification that says so and suggests the setting
@@ -251,11 +251,11 @@ setting is off, LookFocus releases the camera and shows a notification that says
   re-publishes the camera (all sensor groups re-published at 12:43:13, right after the user flipped it), so
   a stale result can't linger. A result is discarded if the camera was released while the probe ran.
   Verified: ON in 2.8 s. The OFF result is **[unverified]** since the setting is now on.
-- **Hint only:** the Frame Server sensor-group key for this camera
+- **Hint only (turned out meaningless, D-023):** the Frame Server sensor-group key for this camera
   (`HKLM\SOFTWARE\Microsoft\Windows Media Foundation\FrameServer\SensorGroups\<hash>`) carries an undocumented
   `MEPSGFlag=1`; the IR sensor groups don't. It's logged next to each probe so its meaning can be confirmed,
   never trusted on its own.
-- **Other-app detection:** the camera privacy store `HKCU\...\CapabilityAccessManager\ConsentStore\webcam`
+- **Other-app detection (SUPERSEDED by D-023: blind to blocked apps):** the camera privacy store `HKCU\...\CapabilityAccessManager\ConsentStore\webcam`
   (packaged apps by family name, desktop apps under `NonPackaged\<exe path>`, `LastUsedTimeStop == 0` =
   in use). `UsageWatcher` waits on `RegNotifyChangeKeyValue` for the whole subtree (event-driven, plus a 5 s
   rescan), and diffs sessions by `LastUsedTimeStart` so only *new* sessions count. LookFocus's own executable
@@ -278,7 +278,7 @@ setting is off, LookFocus releases the camera and shows a notification that says
     and reopens.
   - real probe (ON): the other app starts → "sharing is on, keeping it" → the other app gets 178 frames while
     LookFocus keeps streaming.
-- **[unverified] The key open question:** with the setting OFF, does a *blocked* app (open succeeds, no frames)
+- **The key open question, answered NO in D-023:** with the setting OFF, does a *blocked* app (open succeeds, no frames)
   register in the privacy store? The Python 3.14 stand-in only registered once it actually streamed (it never
   appeared while its MSMF open was failing). If blocked apps don't register, detection can't fire, and the pause
   hotkey is the fallback. The user needs to test this with the setting temporarily off.
@@ -387,3 +387,59 @@ the bezel, so it flagged a perfectly good synthetic calibration. The check inste
 distances and flags a problem when (a) a display's centre, left out, is classified onto another display,
 (b) it lies inside another display's region, or (c) two centres are less than 6× the calibration noise apart
 (this catches "calibrated with the eyes, not the head": synthetic centres 1.0° apart = 2.2× noise → flagged).
+
+## Post-M2 fixes from the user's camera-sharing test (setting OFF)
+
+### D-023 Other-app detection: MF sensor activity monitor, not the privacy store **[verified with setting OFF]**
+User report: with the setting off, (1) LookFocus kept the camera when Firefox's webcam test started, with
+no release; (2) with Firefox streaming first, `debug_pose` looped "camera open (dshow) → stopped delivering
+frames → reopening" every ~10 s.
+- **(1) root cause, verified:** the camera privacy store only records an app once it actually streams. A
+  second app blocked by LookFocus never appears there (the Python 3.14 stand-in's entry stayed at its old
+  13:05 timestamp through a blocked 6 s session). The D-015 detector could never fire in the one case it
+  exists for.
+- **New detector:** `MFCreateSensorActivityMonitor` (mfsensorgroup.dll, Win10 1809+, the mechanism behind
+  the privacy indicator), implemented in `camera_activity.py` with ctypes COM, including our own
+  `IMFSensorActivitiesReportCallback` object. IIDs and vtable order come from the installed Windows SDK
+  header (10.0.26100.0 `mfidl.h`). Each report lists, per device (symbolic link), every **process** with
+  the device open, whether it's streaming, and controller/shared mode. Measured with the setting off:
+  - LookFocus streaming, then another app opens → it shows up as **"open, not streaming"** 0.39 s later
+    (with a blocked frame trickle of 5–6 frames per 6 s).
+  - Firefox kept the camera **open but idle** after its webcam test stopped streaming (pid 15156 in every
+    report). "Open, not streaming" therefore also means "idle holder", and the policy must handle both.
+- **Policy (`camera_usage.ActivityPolicy`, pure, 13 tests):** a process that *newly* opens LookFocus's
+  camera while LookFocus streams (sharing not known ON) → yield. Processes present when LookFocus got frames
+  are the baseline (not blocked by it). While yielded, resume once every blocker has streamed and stopped,
+  or closed, for 2 s. A blocker that never streams within 10 s was an idle holder: resume and ignore it
+  until it closes the camera. Busy at start (no frames and another process *streaming*) → wait for the
+  streaming ones only, with idle holders as the baseline (fixes a measured case where idle Firefox delayed
+  the resume by the 10 s idle timeout).
+- **Own processes:** LookFocus's PID and its sharing-probe children are excluded. The probe prints its own
+  PID first, because from a venv `Popen().pid` is the launcher's, not the interpreter that opens the camera.
+- **Device matching:** exact device via `device_key()` (MSMF and DSHOW paths of the same camera match),
+  excluding `KSCATEGORY_SENSOR_CAMERA` links (the Windows Hello IR stream shares the device instance).
+  Process names are looked up when a process is first seen (it may exit before the resume message).
+- **Verified end to end, setting OFF, idle Firefox present the whole time:**
+  - A (LookFocus first): the other app starts at 7.00 s → LookFocus releases at 7.89 s → the formerly
+    blocked app **starts receiving frames without restarting** (222–234 frames in 8 s) → exits → LookFocus
+    resumes 2 s later. The sharing probe and idle Firefox trigger nothing.
+  - B (other app first): MSMF and DSHOW both rejected as "no frames" → `busy` event at 11.4 s →
+    the other app exits at 15.7 s → resume at 17.7 s → open. Detection takes ~8 s because each backend gets
+    its 3–4 s frame check first; acceptable for the startup-only case.
+- The privacy-store reader/watcher was removed (dead code); `camera_usage.py` now holds only the pure
+  policy, names and notices.
+- `MEPSGFlag` reads 1 with the setting OFF too → it doesn't indicate the setting (dropped as a hint in the
+  docs; still logged).
+
+### D-024 Camera verification requires a steady stream **[verified]**
+Root cause of (2): a DSHOW client blocked by another app still "opens" and trickles ~1 frame/s, and the old
+check (3 frames within 3 s) accepted it. Now an open counts only after **5 real frames** (lit, or with sensor
+noise; blocked clients can get all-black frames) within 3 s. A free camera does that in < 0.4 s even in a
+dark room (15–30 fps). Also, "busy" now means "some device opened but gave no frames", even if other devices
+failed for other reasons (the OBS virtual camera "did not open" had been masking it).
+
+### D-025 Notification text fits the 255-character balloon **[unit-tested]**
+The D-015 example was wrong: with a long app name ("Microsoft Teams") the full Settings path overflowed
+the limit and fell back to the short form. The body is now "<App> started using the camera, so LookFocus
+released it and will resume afterwards." plus the most specific tip that fits: path with camera name →
+path with "(your camera)" → "Settings > Bluetooth & devices > Cameras" → "camera settings".

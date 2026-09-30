@@ -25,7 +25,9 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from lookfocus.camera_usage import SETTING_NAME
@@ -113,23 +115,48 @@ def probe_command(backend: str, index: int, seconds: float) -> list[str]:
     return [sys.executable, "-m", "lookfocus.camera_sharing", *args]
 
 
-def probe_while_holding(backend: str, index: int, seconds: float = 2.0, timeout_s: float = 20.0) -> Sharing:
-    """Call ONLY while this process holds camera `index` open and streaming: can a second app see it?"""
+def probe_while_holding(
+    backend: str,
+    index: int,
+    seconds: float = 2.0,
+    timeout_s: float = 20.0,
+    on_child_pid: Callable[[int], None] | None = None,
+) -> Sharing:
+    """Call ONLY while this process holds camera `index` open and streaming: can a second app see it?
+
+    The child prints its own PID before it opens the camera, so the caller can recognise it in camera
+    activity reports (Popen's PID would be the venv launcher's, not the interpreter that opens the camera).
+    """
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             probe_command(backend, index, seconds),
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
             text=True,
-            timeout=timeout_s,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-    except (OSError, subprocess.TimeoutExpired) as e:
+    except OSError as e:
         log.warning("camera sharing probe failed to run: %s", e)
         return Sharing.UNKNOWN
-    line = next((ln for ln in proc.stdout.splitlines() if ln.startswith("{")), "")
+    watchdog = threading.Timer(timeout_s, proc.kill)
+    watchdog.start()
+    info = None
     try:
-        info = json.loads(line)
-    except ValueError:
+        for line in proc.stdout:
+            if not line.startswith("{"):
+                continue
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                continue
+            if "pid" in msg and on_child_pid is not None:
+                on_child_pid(int(msg["pid"]))
+            if "opened" in msg:
+                info = msg
+        proc.wait()
+    finally:
+        watchdog.cancel()
+    if info is None:
         log.warning("camera sharing probe gave no result (rc=%s)", proc.returncode)
         return Sharing.UNKNOWN
     log.info("camera sharing probe: %s", info)
@@ -140,6 +167,7 @@ def probe_while_holding(backend: str, index: int, seconds: float = 2.0, timeout_
 
 def _child(backend: str, index: int, seconds: float) -> dict:
     """Probe child: open the camera like a second app would, report whether real frames arrive."""
+    print(json.dumps({"pid": os.getpid()}), flush=True)  # lets the parent recognise us in activity reports
     from lookfocus.capture import motion, open_camera, thumbnail
 
     res = open_camera(index, backend, timeout_s=10)

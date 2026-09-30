@@ -160,7 +160,9 @@ class Guided:
 
 
 def put(img, text, org, scale=0.5, color=(230, 230, 230), thick=1):
-    cv2.putText(img, text, org, FONT, scale, (0, 0, 0), thick + 2, cv2.LINE_AA)
+    # Drop shadow at the same thickness: a thicker Hershey stroke also widens the glyph advance, so a
+    # thick black "outline" would run past the text (the ghosting seen in the M1 screenshot).
+    cv2.putText(img, text, (org[0] + 1, org[1] + 1), FONT, scale, (0, 0, 0), thick, cv2.LINE_AA)
     cv2.putText(img, text, org, FONT, scale, color, thick, cv2.LINE_AA)
 
 

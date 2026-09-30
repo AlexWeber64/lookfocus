@@ -16,6 +16,7 @@ queued).
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from collections.abc import Callable
@@ -28,18 +29,10 @@ import numpy as np
 
 from lookfocus import camera_sharing, privacy
 from lookfocus import pose as posemath
-from lookfocus.camera_enum import CameraChoice, candidate_indices, list_cameras
+from lookfocus.camera_activity import SensorActivityMonitor, SensorDevice, process_name
+from lookfocus.camera_enum import CameraChoice, candidate_indices, device_key, list_cameras
 from lookfocus.camera_sharing import Sharing
-from lookfocus.camera_usage import (
-    CameraUse,
-    UsageWatcher,
-    YieldPolicy,
-    app_display_name,
-    busy_notice,
-    in_use_now,
-    read_usage,
-    yield_notice,
-)
+from lookfocus.camera_usage import ActivityPolicy, Others, busy_notice, friendly_app_name, yield_notice
 from lookfocus.paths import MODEL_PATH
 
 log = logging.getLogger(__name__)
@@ -198,6 +191,13 @@ class CameraError(RuntimeError):
 FRESH_READ_S = 0.008
 MAX_DRAIN = 4
 NO_FRAMES = "opened but delivered no frames"
+# A camera held by another app can still "open" and trickle out a frame a second (DSHOW, measured), so an
+# open only counts once this many real frames arrive within first_frames_timeout_s (a free camera does
+# that in well under half a second).
+VERIFY_FRAMES = 5
+# KSCATEGORY_SENSOR_CAMERA: the IR / Windows Hello sensor published by the same camera module. Its
+# symbolic link shares the device instance with the colour camera, so device_key() can't separate them.
+SENSOR_CAMERA_CATEGORY = "{24e552d7-6523-47f7-a647-d3465bf1f5ca}"
 
 
 class CameraSource:
@@ -212,6 +212,7 @@ class CameraSource:
         self.name = ""
         self.path = ""
         self.busy = False  # last open failed only because no device delivered frames
+        self.tried_keys: set[str] = set()  # device keys the last open() attempted (for busy detection)
 
     def open(self) -> None:
         """Pick, open and verify a camera, or raise CameraError explaining every attempt."""
@@ -220,6 +221,7 @@ class CameraSource:
         problems: list[str] = []
         opened_without_frames = 0
         other_failures = 0
+        self.tried_keys = set()
         for backend in backends:
             devices = list_cameras(backend)
             by_index = {d.index: d for d in devices}
@@ -228,6 +230,8 @@ class CameraSource:
                 problems.append(f"{backend}: configured camera not found, trying others")
             for idx in indices:
                 dev = by_index.get(idx)
+                if dev is not None and dev.path:
+                    self.tried_keys.add(device_key(dev.path))
                 label = f"{backend}:{idx} {dev.name if dev else '?'!r}"
                 res = open_camera(idx, backend, width=s.width, height=s.height, timeout_s=s.open_timeout_s)
                 if not res.ok:
@@ -250,18 +254,27 @@ class CameraSource:
                 else:
                     other_failures += 1
                 log.info("camera rejected: %s: %s", label, verdict)
-        self.busy = opened_without_frames > 0 and other_failures == 0
+        # Some device opened but gave no frames: most likely another app holds it (other devices failing
+        # for other reasons, e.g. an OBS virtual camera with OBS closed, don't change that).
+        self.busy = opened_without_frames > 0
         raise CameraError("; ".join(problems) or "no cameras found")
 
     def _verify(self, cap: cv2.VideoCapture) -> str:
-        """Frames must arrive, and must not come from a greyscale (IR) sensor."""
+        """A steady stream of real frames must arrive, and not from a greyscale (IR) sensor."""
         t_end = time.monotonic() + self.settings.first_frames_timeout_s
         stats: list[FrameStats] = []
-        while time.monotonic() < t_end and len(stats) < 3:
+        prev = None
+        while time.monotonic() < t_end and len(stats) < VERIFY_FRAMES:
             ok, frame = cap.read()
-            if ok and frame is not None:
+            if not ok or frame is None:
+                time.sleep(0.02)
+                continue
+            th = thumbnail(frame)
+            # blocked clients may get all-black frames; a live sensor is lit or at least noisy
+            if float(th.mean()) > 0.5 or (prev is not None and motion(prev, th) > 0.05):
                 stats.append(frame_stats(frame))
-        if not stats:
+            prev = th
+        if len(stats) < VERIFY_FRAMES:
             return NO_FRAMES + " (camera in use by another app?)"
         if sum(st.greyscale for st in stats) * 2 > len(stats):
             return "greyscale frames (IR / Windows Hello sensor?), skipped"
@@ -362,7 +375,7 @@ class CaptureThread(threading.Thread):
 
     Statuses: opening, tracking (face in this frame), lost (no face, but seen within no_face_s),
     no_face (none for no_face_s: processing drops to idle_fps), error, paused (camera released),
-    yielded (camera released for another app, D-015), stopped.
+    yielded (camera released for another app, D-015/D-023), stopped.
 
     Events, via `on_event(kind, info)` from this thread: "yielded" / "busy" (with a notification title and
     body), "resumed", "sharing" (result of the camera-sharing probe).
@@ -388,10 +401,11 @@ class CaptureThread(threading.Thread):
         self._paused = False
         self.sharing = Sharing.UNKNOWN
         self.sharing_available = False
-        self._policy = YieldPolicy(grace_s=settings.yield_grace_s)
-        self._usage_lock = threading.Lock()
-        self._usage_started: list[CameraUse] = []
-        self._usage_current: dict[str, CameraUse] | None = None
+        self._policy = ActivityPolicy(grace_s=settings.yield_grace_s)
+        self._activity_lock = threading.Lock()
+        self._activity: list[SensorDevice] = []
+        self._own_pids = {os.getpid()}  # this process and its camera-sharing probe children
+        self._pid_names: dict[int, str] = {}  # looked up on first sight: a process may exit before we report
         self._force_resume = False
         self._yield_message = ""
         self._gen = 0  # bumped whenever the camera is opened or released; stale probe results are dropped
@@ -409,7 +423,7 @@ class CaptureThread(threading.Thread):
 
     def resume_from_yield(self) -> None:
         """User override: take the camera back even though another app still reports using one."""
-        with self._usage_lock:
+        with self._activity_lock:
             self._force_resume = True
         self._wake.set()
 
@@ -434,13 +448,33 @@ class CaptureThread(threading.Thread):
             self._wake.wait(seconds)
         self._wake.clear()
 
-    def _on_usage(self, started: list[CameraUse], current: dict[str, CameraUse]) -> None:
-        """UsageWatcher thread: another app started/stopped using a camera."""
-        with self._usage_lock:
-            self._usage_started.extend(started)
-            self._usage_current = current
-        if started:
-            self._wake.set()
+    def _on_activity(self, devices: list[SensorDevice]) -> None:
+        """MF sensor activity monitor (MF worker thread): camera usage changed somewhere."""
+        with self._activity_lock:
+            self._activity = devices
+        self._wake.set()
+
+    def _others(self, source: CameraSource) -> Others:
+        """Processes other than LookFocus that have LookFocus's camera open: pid -> streaming."""
+        keys = {device_key(source.path)} if source.path else set(source.tried_keys)
+        with self._activity_lock:
+            devices = list(self._activity)
+            own = set(self._own_pids)
+        out: Others = {}
+        for d in devices:
+            if SENSOR_CAMERA_CATEGORY in d.link.lower():
+                continue  # IR / Windows Hello stream of the same module: not the camera LookFocus uses
+            if keys and device_key(d.link) not in keys:
+                continue
+            for p in d.processes:
+                if p.pid not in own:
+                    out[p.pid] = out.get(p.pid, False) or p.streaming
+                    if p.pid not in self._pid_names:
+                        self._pid_names[p.pid] = friendly_app_name(process_name(p.pid))
+        return out
+
+    def _names(self, pids) -> list[str]:
+        return [self._pid_names.get(p) or friendly_app_name("") for p in sorted(pids)]
 
     def run(self) -> None:
         try:
@@ -455,22 +489,29 @@ class CaptureThread(threading.Thread):
             self.sharing_available = False
         if not self.sharing_available:
             self.sharing = Sharing.UNSUPPORTED
-        watcher = None
+        monitor = None
         if self.settings.yield_to_other_apps:
-            watcher = UsageWatcher(self._on_usage)
-            watcher.start()
+            monitor = SensorActivityMonitor(self._on_activity)
+            monitor.start()
+            monitor.started_ok.wait(5)
+            if monitor.error:
+                log.warning("can't watch other apps' camera use: %s", monitor.error)
         source = CameraSource(self.settings)
         try:
             self._loop(source, tracker)
         finally:
-            if watcher is not None:
-                watcher.stop()
+            if monitor is not None:
+                monitor.stop()
             source.release()
             tracker.close()
             self._publish("stopped")
 
     def _probe_sharing(self, gen: int, backend: str, index: int, path: str) -> None:
-        state = camera_sharing.probe_while_holding(backend, index)
+        def own(pid: int) -> None:
+            with self._activity_lock:
+                self._own_pids.add(pid)
+
+        state = camera_sharing.probe_while_holding(backend, index, on_child_pid=own)
         hint = camera_sharing.frame_server_hint(path) if path else None
         if gen != self._gen:
             log.info("camera sharing probe discarded: camera was released while it ran")
@@ -480,40 +521,33 @@ class CaptureThread(threading.Thread):
         log.info("camera sharing: %s (probe), MEPSGFlag hint=%s", state.value, hint)
         self._emit("sharing", state=state.value, hint=hint, available=self.sharing_available)
 
-    def _handle_usage(self, source: CameraSource) -> None:
-        """Apply YieldPolicy to what UsageWatcher reported (and, while yielded, to a fresh snapshot)."""
-        with self._usage_lock:
-            started, self._usage_started = self._usage_started, []
-            current = self._usage_current
+    def _handle_activity(self, source: CameraSource) -> None:
+        """Apply ActivityPolicy to the latest camera activity report."""
+        with self._activity_lock:
             force, self._force_resume = self._force_resume, False
         policy = self._policy
+        others = self._others(source)
         if force and policy.yielded:
-            policy.user_resume(read_usage())
-            log.info("resumed by user while another app may still use the camera")
-            self._emit("resumed", manual=True)
+            policy.user_resume(others)
+            log.info("camera taken back by the user")
+            self._emit("resumed", manual=True, apps=[])
             return
         if policy.yielded:
-            current = read_usage()
-        elif not started:
-            return
+            log.debug("yielded; other processes on the camera (pid: streaming): %s", others)
         blockers_before = set(policy.blockers)
-        action = policy.on_usage(self.clock(), started, current or {}, self.sharing is Sharing.ON)
+        action = policy.update(self.clock(), others, source.cap is not None, self.sharing is Sharing.ON)
         if action == "yield":
-            apps = [app_display_name(a) for a in sorted(policy.blockers)]
+            apps = self._names(policy.blockers)
             source.release()
             self._gen += 1
             title, body = yield_notice(apps, self.sharing_available, source.name)
             self._yield_message = f"camera released for {', '.join(apps)}; resumes when it's done"
-            log.info("%s started using a camera; camera released (sharing: %s)", apps, self.sharing.value)
+            log.info("%s opened the camera; released it (sharing: %s)", apps, self.sharing.value)
             self._emit("yielded", apps=apps, title=title, body=body)
         elif action == "resume":
-            apps = [app_display_name(a) for a in sorted(blockers_before)]
+            apps = self._names(blockers_before)
             log.info("%s done with the camera; resuming", apps)
             self._emit("resumed", manual=False, apps=apps)
-        elif started and not policy.yielded:
-            log.info(
-                "%s started using a camera; sharing is on, keeping it", [u.display_name for u in started]
-            )
 
     def _loop(self, source: CameraSource, tracker: FaceTracker) -> None:
         s = self.settings
@@ -537,10 +571,10 @@ class CaptureThread(threading.Thread):
                 continue
 
             if s.yield_to_other_apps:
-                self._handle_usage(source)
+                self._handle_activity(source)
                 if self._policy.yielded:
                     self._publish("yielded", message=self._yield_message)
-                    self._sleep(1.0)  # re-check the privacy store about once a second
+                    self._sleep(0.5)  # woken early by activity reports; the timeout drives the grace timers
                     continue
 
             if source.cap is None:
@@ -548,7 +582,7 @@ class CaptureThread(threading.Thread):
                 try:
                     source.open()
                 except CameraError as e:
-                    if s.yield_to_other_apps and source.busy and self._wait_for_busy_camera():
+                    if s.yield_to_other_apps and source.busy and self._wait_for_busy_camera(source):
                         continue
                     wait = s.backoff_s[min(attempt, len(s.backoff_s) - 1)]
                     attempt += 1
@@ -561,6 +595,7 @@ class CaptureThread(threading.Thread):
                 next_due = 0.0
                 last_processed, prev_thumb, static_run = None, None, 0
                 self._gen += 1
+                self._policy.start_holding(self._others(source))
                 if s.probe_sharing and self.sharing_available:
                     threading.Thread(
                         target=self._probe_sharing,
@@ -626,12 +661,12 @@ class CaptureThread(threading.Thread):
             if self.debug_hook is not None:
                 self.debug_hook(frame, pts, sample)
 
-    def _wait_for_busy_camera(self) -> bool:
-        """Open got no frames: if other apps are using a camera, wait for them instead of retrying."""
-        others = in_use_now(read_usage(), UsageWatcher.default_exclude())
-        if not self._policy.block_on(others):
+    def _wait_for_busy_camera(self, source: CameraSource) -> bool:
+        """Open got no frames: if other processes are streaming from this camera, wait for them."""
+        time.sleep(0.3)  # let the activity report for our own failed open settle
+        if not self._policy.block_on(self.clock(), self._others(source)):
             return False
-        apps = [app_display_name(a) for a in sorted(self._policy.blockers)]
+        apps = self._names(self._policy.blockers)
         title, body = busy_notice(apps, self.sharing_available)
         self._yield_message = f"camera in use by {', '.join(apps)}; starting when it's done"
         log.info("camera busy (%s); waiting for it", apps)

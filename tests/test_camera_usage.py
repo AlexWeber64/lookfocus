@@ -4,147 +4,151 @@ from lookfocus.camera_sharing import WindowsBuild, feature_available, probe_comm
 from lookfocus.camera_usage import (
     NOTICE_BODY_MAX,
     NOTICE_TITLE_MAX,
-    CameraUse,
-    YieldPolicy,
-    app_display_name,
+    ActivityPolicy,
     busy_notice,
-    exe_app_id,
-    in_use_now,
-    started_since,
+    friendly_app_name,
     yield_notice,
 )
 
-ME = exe_app_id(r"C:\Users\me\AppData\Local\Programs\Python\Python312\python.exe")
-TEAMS = "MSTeams_8wekyb3d8bbwe"
-ZOOM = exe_app_id(r"C:\Users\me\AppData\Roaming\Zoom\bin\Zoom.exe")
+FIREFOX, TEAMS, ZOOM = 15156, 4242, 777
 
 
-def use(app, start, stop=0):
-    return CameraUse(app, start, stop)
+class TestActivityPolicy:
+    def test_newcomer_while_holding_triggers_yield(self):
+        p = ActivityPolicy()
+        p.start_holding({})
+        assert p.update(0.0, {}, holding=True, sharing_on=False) is None
+        assert p.update(1.0, {TEAMS: False}, holding=True, sharing_on=False) == "yield"
+        assert p.yielded and p.blockers == {TEAMS}
 
+    def test_process_present_when_we_got_frames_is_ignored(self):
+        # Firefox idly keeps the camera open (measured); LookFocus still gets frames, so it isn't blocked.
+        p = ActivityPolicy()
+        p.start_holding({FIREFOX: False})
+        assert p.update(1.0, {FIREFOX: False}, True, False) is None
+        assert p.update(2.0, {FIREFOX: False, TEAMS: False}, True, False) == "yield"
+        assert p.blockers == {TEAMS}
 
-def snap(*uses):
-    return {u.app_id: u for u in uses}
+    def test_no_yield_when_sharing_is_on(self):
+        p = ActivityPolicy()
+        p.start_holding({})
+        assert p.update(1.0, {TEAMS: True}, True, sharing_on=True) is None
+        assert not p.yielded
+        # and it stays accepted even if the sharing state later reads off
+        assert p.update(2.0, {TEAMS: True}, True, sharing_on=False) is None
+
+    def test_no_yield_when_not_holding(self):
+        p = ActivityPolicy()
+        assert p.update(1.0, {TEAMS: False}, holding=False, sharing_on=False) is None
+
+    def test_resume_after_blocker_streams_then_stops(self):
+        p = ActivityPolicy(grace_s=2.0)
+        p.start_holding({})
+        p.update(0.0, {TEAMS: False}, True, False)  # yield
+        assert p.update(1.0, {TEAMS: True}, False, False) is None  # Teams now has video
+        assert p.update(60.0, {TEAMS: True}, False, False) is None  # long call, no timeout while streaming
+        assert p.update(61.0, {TEAMS: False}, False, False) is None  # call ended, device still open
+        assert p.update(62.9, {TEAMS: False}, False, False) is None
+        assert p.update(63.0, {TEAMS: False}, False, False) == "resume"
+        assert TEAMS in p.ignored  # an idle open device shouldn't re-trigger a yield
+        assert p.update(64.0, {TEAMS: False}, True, False) is None
+
+    def test_resume_when_blocker_closes(self):
+        p = ActivityPolicy(grace_s=1.0)
+        p.start_holding({})
+        p.update(0.0, {ZOOM: False}, True, False)
+        p.update(0.5, {ZOOM: True}, False, False)
+        assert p.update(5.0, {}, False, False) is None
+        assert p.update(6.0, {}, False, False) == "resume"
+
+    def test_idle_holder_times_out(self):
+        p = ActivityPolicy(grace_s=2.0, idle_timeout_s=10.0)
+        p.start_holding({})
+        p.update(0.0, {FIREFOX: False}, True, False)  # yield
+        assert p.update(9.9, {FIREFOX: False}, False, False) is None  # still might be starting
+        assert p.update(10.0, {FIREFOX: False}, False, False) is None  # grace starts
+        assert p.update(12.0, {FIREFOX: False}, False, False) == "resume"
+        assert p.update(13.0, {FIREFOX: False}, True, False) is None  # ignored from now on
+
+    def test_ignored_process_that_closes_and_reopens_triggers_again(self):
+        p = ActivityPolicy(grace_s=0.0, idle_timeout_s=0.0)
+        p.start_holding({})
+        p.update(0.0, {FIREFOX: False}, True, False)
+        assert p.update(1.0, {FIREFOX: False}, False, False) == "resume"
+        p.update(2.0, {}, True, False)  # Firefox closed the camera
+        assert p.update(3.0, {FIREFOX: False}, True, False) == "yield"
+
+    def test_late_joiner_gets_its_own_start_window(self):
+        p = ActivityPolicy(grace_s=0.0, idle_timeout_s=10.0)
+        p.start_holding({})
+        p.update(0.0, {TEAMS: False}, True, False)
+        p.update(1.0, {TEAMS: True}, False, False)
+        p.update(8.0, {TEAMS: False, ZOOM: False}, False, False)  # Teams done, Zoom arrives
+        assert p.update(9.0, {TEAMS: False, ZOOM: False}, False, False) is None  # Zoom still starting
+        assert p.update(18.1, {TEAMS: False, ZOOM: False}, False, False) == "resume"
+
+    def test_busy_at_start_waits_for_streaming_apps(self):
+        p = ActivityPolicy(grace_s=1.0)
+        assert not p.block_on(0.0, {FIREFOX: False})  # idle holder isn't why we got no frames
+        assert p.block_on(0.0, {FIREFOX: True})
+        assert p.update(5.0, {FIREFOX: True}, False, False) is None
+        p.update(6.0, {FIREFOX: False}, False, False)
+        assert p.update(7.0, {FIREFOX: False}, False, False) == "resume"
+
+    def test_busy_ignores_idle_holders(self):
+        # Measured: Firefox idles with the camera open, another app streams, LookFocus gets no frames.
+        p = ActivityPolicy(grace_s=2.0, idle_timeout_s=10.0)
+        assert p.block_on(11.5, {FIREFOX: False, ZOOM: True})
+        assert p.update(15.0, {FIREFOX: False, ZOOM: True}, False, False) is None
+        assert p.update(15.8, {FIREFOX: False}, False, False) is None  # Zoom exits
+        assert p.update(17.8, {FIREFOX: False}, False, False) == "resume"  # grace only, no idle timeout
+
+    def test_manual_resume_waives_current_blockers(self):
+        p = ActivityPolicy()
+        p.start_holding({})
+        p.update(0.0, {TEAMS: False}, True, False)
+        p.user_resume({TEAMS: False})
+        assert not p.yielded
+        assert p.update(1.0, {TEAMS: False}, True, False) is None
+
+    def test_baseline_forgets_processes_that_close(self):
+        p = ActivityPolicy()
+        p.start_holding({FIREFOX: False})
+        p.update(1.0, {}, True, False)
+        assert p.update(2.0, {FIREFOX: False}, True, False) == "yield"
 
 
 class TestNames:
     @pytest.mark.parametrize(
-        ("app_id", "name"),
+        ("exe", "name"),
         [
-            (ZOOM, "Zoom"),
-            (TEAMS, "Microsoft Teams"),
-            ("Microsoft.WindowsCamera_8wekyb3d8bbwe", "Camera"),
-            ("windows.immersivecontrolpanel_cw5n1h2txyewy", "Settings"),
-            ("Mozilla.Firefox_n80bbvh6b1yt2", "Mozilla.Firefox"),
-            (exe_app_id(r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe"), "brave"),
+            ("firefox", "Firefox"),
+            ("ms-teams.exe", "Microsoft Teams"),
+            ("Zoom", "Zoom"),
+            (r"C:\Program Files\Google\Chrome\Application\chrome.exe", "Google Chrome"),
+            ("WindowsCamera", "Camera"),
+            ("SomeTool", "SomeTool"),
+            ("", "Another app"),
         ],
     )
-    def test_display_name(self, app_id, name):
-        assert app_display_name(app_id) == name
-
-    def test_exe_app_id_matches_registry_form(self):
-        assert exe_app_id(r"C:\a\b.exe") == "NonPackaged\\C:#a#b.exe"
-
-
-class TestDiff:
-    def test_new_session_detected(self):
-        prev = snap(use(TEAMS, 100, 200))
-        cur = snap(use(TEAMS, 300))
-        assert [u.app_id for u in started_since(prev, cur, set())] == [TEAMS]
-
-    def test_new_entry_detected(self):
-        assert [u.app_id for u in started_since({}, snap(use(ZOOM, 5)), set())] == [ZOOM]
-
-    def test_ongoing_session_not_reported_twice(self):
-        s = snap(use(TEAMS, 300))
-        assert started_since(s, s, set()) == []
-
-    def test_stopped_sessions_ignored(self):
-        assert started_since({}, snap(use(TEAMS, 300, 400)), set()) == []
-
-    def test_own_app_excluded_case_insensitively(self):
-        assert started_since({}, snap(use(ME, 5)), {ME.upper()}) == []
-
-    def test_in_use_now(self):
-        cur = snap(use(TEAMS, 1), use(ZOOM, 1, 2), use(ME, 1))
-        assert in_use_now(cur, {ME}) == {TEAMS}
-
-
-class TestYieldPolicy:
-    def test_yields_when_sharing_off(self):
-        p = YieldPolicy()
-        cur = snap(use(TEAMS, 10))
-        assert p.on_usage(0.0, [cur[TEAMS]], cur, sharing_on=False) == "yield"
-        assert p.yielded and p.blockers == {TEAMS}
-
-    def test_keeps_camera_when_sharing_on(self):
-        p = YieldPolicy()
-        cur = snap(use(TEAMS, 10))
-        assert p.on_usage(0.0, [cur[TEAMS]], cur, sharing_on=True) is None
-        assert not p.yielded
-
-    def test_resumes_after_grace_once_blocker_stops(self):
-        p = YieldPolicy(grace_s=2.0)
-        cur = snap(use(TEAMS, 10))
-        p.on_usage(0.0, [cur[TEAMS]], cur, False)
-        assert p.on_usage(5.0, [], cur, False) is None  # still in use
-        done = snap(use(TEAMS, 10, 20))
-        assert p.on_usage(6.0, [], done, False) is None  # grace starts
-        assert p.on_usage(7.9, [], done, False) is None
-        assert p.on_usage(8.0, [], done, False) == "resume"
-        assert not p.yielded
-
-    def test_grace_restarts_if_blocker_comes_back(self):
-        p = YieldPolicy(grace_s=2.0)
-        cur = snap(use(TEAMS, 10))
-        p.on_usage(0.0, [cur[TEAMS]], cur, False)
-        p.on_usage(1.0, [], snap(use(TEAMS, 10, 20)), False)
-        again = snap(use(TEAMS, 30))
-        assert p.on_usage(2.5, [again[TEAMS]], again, False) is None
-        assert p.on_usage(10.0, [], snap(use(TEAMS, 30, 40)), False) is None  # new grace window
-        assert p.on_usage(12.0, [], snap(use(TEAMS, 30, 40)), False) == "resume"
-
-    def test_waits_for_every_app_that_started_while_yielded(self):
-        p = YieldPolicy(grace_s=0.0)
-        cur = snap(use(TEAMS, 10))
-        p.on_usage(0.0, [cur[TEAMS]], cur, False)
-        both = snap(use(TEAMS, 10), use(ZOOM, 11))
-        assert p.on_usage(1.0, [both[ZOOM]], both, False) is None
-        assert p.on_usage(2.0, [], snap(use(TEAMS, 10, 12), use(ZOOM, 11)), False) is None  # Zoom still on
-        assert p.on_usage(3.0, [], snap(use(TEAMS, 10, 12), use(ZOOM, 11, 13)), False) == "resume"
-
-    def test_manual_resume_ignores_current_session_only(self):
-        p = YieldPolicy()
-        cur = snap(use(TEAMS, 10))
-        p.on_usage(0.0, [cur[TEAMS]], cur, False)
-        p.user_resume(cur)
-        assert not p.yielded
-        # the same Teams session is reported again (e.g. a rescan): no new yield
-        assert p.on_usage(1.0, [cur[TEAMS]], cur, False) is None
-        # a later Teams session does yield again
-        later = snap(use(TEAMS, 99))
-        assert p.on_usage(9.0, [later[TEAMS]], later, False) == "yield"
-
-    def test_block_on_when_camera_busy_at_start(self):
-        p = YieldPolicy(grace_s=0.0)
-        assert p.block_on({ZOOM})
-        assert p.yielded and not p.block_on({TEAMS})
-        assert p.on_usage(1.0, [], snap(use(ZOOM, 1, 2)), False) == "resume"
-
-    def test_block_on_nothing_is_a_no_op(self):
-        assert not YieldPolicy().block_on(set())
+    def test_friendly_app_name(self, exe, name):
+        assert friendly_app_name(exe) == name
 
 
 class TestNotices:
     def test_yield_notice_mentions_setting_when_available(self):
-        title, body = yield_notice(["Microsoft Teams"], True, "Integrated Camera")
+        title, body = yield_notice(["Microsoft Teams"], True, "Integrated Camera")  # 255-char budget
         assert title == "Camera released for Microsoft Teams"
         assert "Allow multiple apps to use camera at the same time" in body
-        assert "Microsoft Teams started using the camera" in body
+        assert "Settings > Bluetooth & devices > Cameras" in body
 
     def test_yield_notice_without_setting(self):
         _, body = yield_notice(["Zoom"], False)
-        assert "Allow multiple apps" not in body and "resumes when Zoom is done" in body
+        assert "Allow multiple apps" not in body and "will resume afterwards" in body
+
+    def test_duplicate_app_names_are_merged(self):
+        title, _ = yield_notice(["Firefox", "Firefox"], False)
+        assert title == "Camera released for Firefox"
 
     @pytest.mark.parametrize("n", [1, 2, 5])
     def test_notices_fit_tray_balloon_limits(self, n):
@@ -155,8 +159,8 @@ class TestNotices:
             assert len(body) <= NOTICE_BODY_MAX
 
     def test_busy_notice(self):
-        title, body = busy_notice(["Zoom"], False)
-        assert title == "Camera in use by Zoom" and "waiting" in body
+        title, body = busy_notice(["Firefox"], False)
+        assert title == "Camera in use by Firefox" and "waiting" in body
 
 
 class TestSharingPure:
