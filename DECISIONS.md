@@ -228,3 +228,90 @@ Other measurements on this camera (dark room, so auto-exposure was slow):
   LookFocus falls back to automatic choice (IR-named devices last) and says so.
 - If the image explains a missing face, a hint is attached: "dark (lens covered or lights off?)" or "frozen
   (software privacy shutter on?)".
+
+## M1 results and camera sharing (user-requested additions)
+
+### D-015 Camera sharing: detect the setting, offer it at setup, yield when it's off **[mostly verified]**
+The user asked for: (1) an optional setup step that checks whether this Windows build has "Allow multiple apps
+to use camera at the same time" and offers to turn it on; (2) when another app starts using the camera and the
+setting is off, LookFocus releases the camera and shows a notification that says so and suggests the setting
+(if the build has it).
+- With the setting ON, `cam_share_test` shows both apps get frames (MSMF second client 120 frames, DSHOW 119;
+  holder unaffected). The second client's chroma of 115–127 worried me (possible colour mis-conversion), but a
+  side-by-side check shows holder and second client both at chroma 54–74 with natural B/G/R means. It's just
+  today's scene, not a conversion problem.
+- **Availability:** Windows build >= 26100.3321 (the setting appeared in 24H2 March 2025; the Settings page
+  moved under "Advanced camera options" in 26100/26200.8524). This is a heuristic: a build can have it staged.
+  This machine: 26200.9457 → available.
+- **State:** there's no API or documented registry value. Microsoft's Q&A answer (2025-09) says to test
+  behaviourally. `camera_sharing.probe_while_holding()` runs a child process (the same executable, so the
+  camera privacy store attributes it to LookFocus itself) that opens the camera while LookFocus holds it, and
+  reports whether real frames arrive (≥ 5 frames that are lit or have sensor noise; a blocked client gets none,
+  or all-black frames). The capture thread runs it after **every** camera open, because toggling the setting
+  re-publishes the camera (all sensor groups re-published at 12:43:13, right after the user flipped it), so
+  a stale result can't linger. A result is discarded if the camera was released while the probe ran.
+  Verified: ON in 2.8 s. The OFF result is **[unverified]** since the setting is now on.
+- **Hint only:** the Frame Server sensor-group key for this camera
+  (`HKLM\SOFTWARE\Microsoft\Windows Media Foundation\FrameServer\SensorGroups\<hash>`) carries an undocumented
+  `MEPSGFlag=1`; the IR sensor groups don't. It's logged next to each probe so its meaning can be confirmed,
+  never trusted on its own.
+- **Other-app detection:** the camera privacy store `HKCU\...\CapabilityAccessManager\ConsentStore\webcam`
+  (packaged apps by family name, desktop apps under `NonPackaged\<exe path>`, `LastUsedTimeStop == 0` =
+  in use). `UsageWatcher` waits on `RegNotifyChangeKeyValue` for the whole subtree (event-driven, plus a 5 s
+  rescan), and diffs sessions by `LastUsedTimeStart` so only *new* sessions count. LookFocus's own executable
+  (and the venv's base interpreter) is excluded. Limits: entries are per app, not per camera (an app using a
+  different camera also triggers a yield), and every process of one executable shares an entry.
+- **Policy** (`YieldPolicy`, pure and unit tested): yield when a new session starts and sharing isn't known to
+  be ON; resume 2 s after every blocking app has stopped; a manual resume waives the current session of those
+  apps only. If LookFocus starts while another app already holds the camera (open gives no frames and the store
+  shows another app in use), it waits for that app ("busy") instead of retrying every 1–30 s.
+- **Notifications:** the capture thread emits `yielded` / `busy` / `resumed` events with the title and body.
+  Bodies fit the tray-balloon limits (63 / 255 characters) and mention the setting only if the build has it.
+  They're shown through the tray icon in M5; until then `debug_pose.py` prints them. Example:
+  "Camera released for Microsoft Teams" / "Microsoft Teams started using the camera, so LookFocus released it.
+  It resumes when Microsoft Teams is done. To use both at once, turn on 'Allow multiple apps to use camera at
+  the same time' in Settings > Bluetooth & devices > Cameras > Integrated Camera > Advanced camera options."
+- **Verified end to end** with a genuinely different executable (a throwaway Python 3.14 + OpenCV "other app";
+  its MSMF backend wouldn't open on this machine, so it used DSHOW):
+  - sharing treated as off: other app starts at t=4.00 s → LookFocus yields at ~4.4–4.5 s (event carries the
+    notification text) → the other app gets 177 frames → it stops at 10.4 s → LookFocus resumes at ~13.5 s
+    and reopens.
+  - real probe (ON): the other app starts → "sharing is on, keeping it" → the other app gets 178 frames while
+    LookFocus keeps streaming.
+- **[unverified] The key open question:** with the setting OFF, does a *blocked* app (open succeeds, no frames)
+  register in the privacy store? The Python 3.14 stand-in only registered once it actually streamed (it never
+  appeared while its MSMF open was failing). If blocked apps don't register, detection can't fire, and the pause
+  hotkey is the fallback. The user needs to test this with the setting temporarily off.
+- **Setup step:** `camera_sharing.run_setup_step()` reports availability, probes, and if OFF explains what that
+  means, shows the Settings path, offers to open `ms-settings:camera`, and re-checks. It's the first step of
+  `lookfocus calibrate` and also runs as `lookfocus camera-sharing` (and `python -m lookfocus.camera_sharing`).
+
+### D-016 Classifier input: matrix yaw/pitch **[verified on the user's hardware]**
+From the user's guided check (median per position, sd at centre):
+
+| estimator axis | span | SNR | crosstalk | tilt leak | repeat |
+|---|---|---|---|---|---|
+| matrix horiz | 40.3° | 38 | 0.02 | 0.24 | 0.02 |
+| matrix vert | 48.3° | 243 | 0.09 | 0.05 | 0.05 |
+| lm3d horiz | 44.9° | 36 | 0.00 | 0.26 | 0.03 |
+| lm3d vert | 54.8° | 265 | 0.05 | 0.06 | 0.04 |
+| lm2d horiz | 0.67 | 49 | 0.04 | 0.12 | 0.02 |
+| lm2d vert | 0.22 | 138 | 0.20 | 0.01 | 0.08 |
+
+- **Matrix pitch is fine on this hardware**: monotonic, sd 0.2°, 48° span, agrees with the independent lm3d
+  pitch at the extremes (UP −37.3 vs −37.3). No need to fall back to landmark pitch. The matrix layout
+  detected as `row` (checked separately).
+- Yaw is noisier at centre (sd ~1.0–1.3° in both estimators, so it's head micro-motion or shared landmark
+  jitter, not a matrix artefact). SNR 38 is ample; the dwell and median filtering absorb it.
+- Tilting the head ~18–22° moved yaw ~10° in *all* estimators (tilt leak 0.24). That looks like real head
+  motion when tilting, not an estimator flaw. Casual tilts are much smaller.
+- Left/right and up/down are asymmetric (+29/−11° yaw, −37/+11° pitch). That's the user's turns, and it
+  doesn't matter because calibration records whatever each monitor produces.
+- → default `pose_source = "matrix"`; `lm3d` stays selectable in config as a fallback.
+
+### D-017 CPU with a face tracked: 8.8% of the machine at 15 fps — must come down (M4) **[measured]**
+Headless capture thread, face tracked for 20 s: **70.5% of one core = 8.8% of 8 CPUs**, inference median
+24.6 ms (p90 28.9 ms) versus 2–4 ms detection-only with no face. That misses "well under 10%". Profiling
+without a face showed a ~3 ms `mp.Image` construction cost, ~0.8 ms `cvtColor`, and MSMF's 30 fps software
+colour conversion (11–17% of a core). Options to measure in M4 with a face present: process at 10–12 fps
+(a 300 ms dwell still gets 3–4 samples), cheaper DSHOW reads, and cutting per-frame copies.

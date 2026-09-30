@@ -26,9 +26,20 @@ from dataclasses import dataclass, field
 import cv2
 import numpy as np
 
+from lookfocus import camera_sharing, privacy
 from lookfocus import pose as posemath
-from lookfocus import privacy
 from lookfocus.camera_enum import CameraChoice, candidate_indices, list_cameras
+from lookfocus.camera_sharing import Sharing
+from lookfocus.camera_usage import (
+    CameraUse,
+    UsageWatcher,
+    YieldPolicy,
+    app_display_name,
+    busy_notice,
+    in_use_now,
+    read_usage,
+    yield_notice,
+)
 from lookfocus.paths import MODEL_PATH
 
 log = logging.getLogger(__name__)
@@ -173,6 +184,9 @@ class CaptureSettings:
     first_frames_timeout_s: float = 3.0  # an open that yields no frames by then counts as failed
     stall_s: float = 3.0  # no frame for this long while running -> reopen
     backoff_s: tuple[float, ...] = (1.0, 2.0, 5.0, 10.0, 30.0)
+    yield_to_other_apps: bool = True  # release the camera when another app starts using one (D-015)
+    probe_sharing: bool = True  # after each open, check whether a second app could use the camera too
+    yield_grace_s: float = 2.0  # resume this long after the other app stopped
 
 
 class CameraError(RuntimeError):
@@ -183,6 +197,7 @@ class CameraError(RuntimeError):
 # Measured on the dev camera: buffered reads take 0.2-3 ms, sensor-paced ones 20-70 ms (D-012).
 FRESH_READ_S = 0.008
 MAX_DRAIN = 4
+NO_FRAMES = "opened but delivered no frames"
 
 
 class CameraSource:
@@ -192,33 +207,50 @@ class CameraSource:
         self.settings = settings
         self.cap: cv2.VideoCapture | None = None
         self.description = ""
+        self.backend = ""
+        self.index = -1
+        self.name = ""
+        self.path = ""
+        self.busy = False  # last open failed only because no device delivered frames
 
     def open(self) -> None:
         """Pick, open and verify a camera, or raise CameraError explaining every attempt."""
         s = self.settings
         backends = [s.backend] + ([b for b in BACKENDS if b != s.backend] if s.fallback else [])
         problems: list[str] = []
+        opened_without_frames = 0
+        other_failures = 0
         for backend in backends:
             devices = list_cameras(backend)
-            names = {d.index: d.name for d in devices}
+            by_index = {d.index: d for d in devices}
             indices, explicit = candidate_indices(devices, s.camera)
             if (s.camera.path or s.camera.name) and not explicit:
                 problems.append(f"{backend}: configured camera not found, trying others")
             for idx in indices:
-                label = f"{backend}:{idx} {names.get(idx, '?')!r}"
+                dev = by_index.get(idx)
+                label = f"{backend}:{idx} {dev.name if dev else '?'!r}"
                 res = open_camera(idx, backend, width=s.width, height=s.height, timeout_s=s.open_timeout_s)
                 if not res.ok:
                     problems.append(f"{label}: {res.error}")
+                    other_failures += 1
                     continue
                 verdict = self._verify(res.cap)
                 if verdict == "ok":
                     self.cap = res.cap
                     self.description = label
+                    self.backend, self.index = backend, idx
+                    self.name, self.path = (dev.name, dev.path) if dev else ("", "")
+                    self.busy = False
                     log.info("camera open: %s (%.2fs)", label, res.open_s)
                     return
                 res.cap.release()
                 problems.append(f"{label}: {verdict}")
+                if verdict.startswith(NO_FRAMES):
+                    opened_without_frames += 1
+                else:
+                    other_failures += 1
                 log.info("camera rejected: %s: %s", label, verdict)
+        self.busy = opened_without_frames > 0 and other_failures == 0
         raise CameraError("; ".join(problems) or "no cameras found")
 
     def _verify(self, cap: cv2.VideoCapture) -> str:
@@ -230,7 +262,7 @@ class CameraSource:
             if ok and frame is not None:
                 stats.append(frame_stats(frame))
         if not stats:
-            return "opened but delivered no frames (camera in use by another app?)"
+            return NO_FRAMES + " (camera in use by another app?)"
         if sum(st.greyscale for st in stats) * 2 > len(stats):
             return "greyscale frames (IR / Windows Hello sensor?), skipped"
         return "ok"
@@ -329,7 +361,11 @@ class CaptureThread(threading.Thread):
     """Camera -> FaceTracker -> LatestSlot[PoseSample], with reopen/backoff and a low-rate no-face mode.
 
     Statuses: opening, tracking (face in this frame), lost (no face, but seen within no_face_s),
-    no_face (none for no_face_s: processing drops to idle_fps), error, paused (camera released), stopped.
+    no_face (none for no_face_s: processing drops to idle_fps), error, paused (camera released),
+    yielded (camera released for another app, D-015), stopped.
+
+    Events, via `on_event(kind, info)` from this thread: "yielded" / "busy" (with a notification title and
+    body), "resumed", "sharing" (result of the camera-sharing probe).
     """
 
     def __init__(
@@ -338,16 +374,27 @@ class CaptureThread(threading.Thread):
         slot: LatestSlot[posemath.PoseSample],
         *,
         debug_hook: DebugHook | None = None,
+        on_event: Callable[[str, dict], None] | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         super().__init__(name="capture", daemon=True)
         self.settings = settings
         self.slot = slot
         self.debug_hook = debug_hook
+        self.on_event = on_event
         self.clock = clock
         self._stop_evt = threading.Event()
         self._wake = threading.Event()
         self._paused = False
+        self.sharing = Sharing.UNKNOWN
+        self.sharing_available = False
+        self._policy = YieldPolicy(grace_s=settings.yield_grace_s)
+        self._usage_lock = threading.Lock()
+        self._usage_started: list[CameraUse] = []
+        self._usage_current: dict[str, CameraUse] | None = None
+        self._force_resume = False
+        self._yield_message = ""
+        self._gen = 0  # bumped whenever the camera is opened or released; stale probe results are dropped
 
     # --- control (any thread) ---
     def stop(self, timeout: float = 5.0) -> None:
@@ -360,15 +407,40 @@ class CaptureThread(threading.Thread):
         self._paused = paused
         self._wake.set()
 
+    def resume_from_yield(self) -> None:
+        """User override: take the camera back even though another app still reports using one."""
+        with self._usage_lock:
+            self._force_resume = True
+        self._wake.set()
+
+    @property
+    def yielded(self) -> bool:
+        return self._policy.yielded
+
     # --- thread body ---
     def _publish(self, status: str, **kw) -> None:
         self.slot.put(posemath.PoseSample(t=self.clock(), status=status, **kw))
 
+    def _emit(self, kind: str, **info) -> None:
+        if self.on_event is not None:
+            try:
+                self.on_event(kind, info)
+            except Exception:
+                log.exception("capture event handler failed")
+
     def _sleep(self, seconds: float) -> None:
-        """Interruptible by stop()/set_paused()."""
+        """Interruptible by stop()/set_paused()/other-app events."""
         if seconds > 0:
             self._wake.wait(seconds)
         self._wake.clear()
+
+    def _on_usage(self, started: list[CameraUse], current: dict[str, CameraUse]) -> None:
+        """UsageWatcher thread: another app started/stopped using a camera."""
+        with self._usage_lock:
+            self._usage_started.extend(started)
+            self._usage_current = current
+        if started:
+            self._wake.set()
 
     def run(self) -> None:
         try:
@@ -377,13 +449,71 @@ class CaptureThread(threading.Thread):
             log.error("face tracker unavailable: %s", e)
             self._publish("error", message=f"face tracker unavailable: {e}")
             return
+        try:
+            self.sharing_available = camera_sharing.feature_available(camera_sharing.windows_build())
+        except OSError:
+            self.sharing_available = False
+        if not self.sharing_available:
+            self.sharing = Sharing.UNSUPPORTED
+        watcher = None
+        if self.settings.yield_to_other_apps:
+            watcher = UsageWatcher(self._on_usage)
+            watcher.start()
         source = CameraSource(self.settings)
         try:
             self._loop(source, tracker)
         finally:
+            if watcher is not None:
+                watcher.stop()
             source.release()
             tracker.close()
             self._publish("stopped")
+
+    def _probe_sharing(self, gen: int, backend: str, index: int, path: str) -> None:
+        state = camera_sharing.probe_while_holding(backend, index)
+        hint = camera_sharing.frame_server_hint(path) if path else None
+        if gen != self._gen:
+            log.info("camera sharing probe discarded: camera was released while it ran")
+            return
+        if state is not Sharing.UNKNOWN:
+            self.sharing = state
+        log.info("camera sharing: %s (probe), MEPSGFlag hint=%s", state.value, hint)
+        self._emit("sharing", state=state.value, hint=hint, available=self.sharing_available)
+
+    def _handle_usage(self, source: CameraSource) -> None:
+        """Apply YieldPolicy to what UsageWatcher reported (and, while yielded, to a fresh snapshot)."""
+        with self._usage_lock:
+            started, self._usage_started = self._usage_started, []
+            current = self._usage_current
+            force, self._force_resume = self._force_resume, False
+        policy = self._policy
+        if force and policy.yielded:
+            policy.user_resume(read_usage())
+            log.info("resumed by user while another app may still use the camera")
+            self._emit("resumed", manual=True)
+            return
+        if policy.yielded:
+            current = read_usage()
+        elif not started:
+            return
+        blockers_before = set(policy.blockers)
+        action = policy.on_usage(self.clock(), started, current or {}, self.sharing is Sharing.ON)
+        if action == "yield":
+            apps = [app_display_name(a) for a in sorted(policy.blockers)]
+            source.release()
+            self._gen += 1
+            title, body = yield_notice(apps, self.sharing_available, source.name)
+            self._yield_message = f"camera released for {', '.join(apps)}; resumes when it's done"
+            log.info("%s started using a camera; camera released (sharing: %s)", apps, self.sharing.value)
+            self._emit("yielded", apps=apps, title=title, body=body)
+        elif action == "resume":
+            apps = [app_display_name(a) for a in sorted(blockers_before)]
+            log.info("%s done with the camera; resuming", apps)
+            self._emit("resumed", manual=False, apps=apps)
+        elif started and not policy.yielded:
+            log.info(
+                "%s started using a camera; sharing is on, keeping it", [u.display_name for u in started]
+            )
 
     def _loop(self, source: CameraSource, tracker: FaceTracker) -> None:
         s = self.settings
@@ -399,17 +529,27 @@ class CaptureThread(threading.Thread):
             if self._paused:
                 if source.cap is not None:
                     source.release()
+                    self._gen += 1
                     log.info("paused: camera released")
                 self._publish("paused")
                 while self._paused and not self._stop_evt.is_set():
                     self._sleep(3600)
                 continue
 
+            if s.yield_to_other_apps:
+                self._handle_usage(source)
+                if self._policy.yielded:
+                    self._publish("yielded", message=self._yield_message)
+                    self._sleep(1.0)  # re-check the privacy store about once a second
+                    continue
+
             if source.cap is None:
                 self._publish("opening")
                 try:
                     source.open()
                 except CameraError as e:
+                    if s.yield_to_other_apps and source.busy and self._wait_for_busy_camera():
+                        continue
                     wait = s.backoff_s[min(attempt, len(s.backoff_s) - 1)]
                     attempt += 1
                     log.warning("camera unavailable (retry in %.0fs): %s", wait, e)
@@ -420,6 +560,14 @@ class CaptureThread(threading.Thread):
                 last_face = last_frame = self.clock()
                 next_due = 0.0
                 last_processed, prev_thumb, static_run = None, None, 0
+                self._gen += 1
+                if s.probe_sharing and self.sharing_available:
+                    threading.Thread(
+                        target=self._probe_sharing,
+                        args=(self._gen, source.backend, source.index, source.path),
+                        name="sharing-probe",
+                        daemon=True,
+                    ).start()
 
             now = self.clock()
             if next_due > now:
@@ -433,6 +581,7 @@ class CaptureThread(threading.Thread):
                 if t - last_frame > s.stall_s:
                     log.warning("camera stopped delivering frames; reopening")
                     source.release()
+                    self._gen += 1
                     self._publish("error", message="camera stopped delivering frames; reopening")
                 continue
             last_frame = t
@@ -476,6 +625,18 @@ class CaptureThread(threading.Thread):
             self.slot.put(sample)
             if self.debug_hook is not None:
                 self.debug_hook(frame, pts, sample)
+
+    def _wait_for_busy_camera(self) -> bool:
+        """Open got no frames: if other apps are using a camera, wait for them instead of retrying."""
+        others = in_use_now(read_usage(), UsageWatcher.default_exclude())
+        if not self._policy.block_on(others):
+            return False
+        apps = [app_display_name(a) for a in sorted(self._policy.blockers)]
+        title, body = busy_notice(apps, self.sharing_available)
+        self._yield_message = f"camera in use by {', '.join(apps)}; starting when it's done"
+        log.info("camera busy (%s); waiting for it", apps)
+        self._emit("busy", apps=apps, title=title, body=body)
+        return True
 
 
 def _feed_hint(frame: np.ndarray, prev: np.ndarray | None, static_run: int) -> tuple[str, np.ndarray, int]:

@@ -7,7 +7,10 @@ so camera selection, fallback, throttling and the no-face mode behave exactly as
 Press G for the guided check: it asks you to look centre / left / right / up / down and to tilt your head,
 then prints a table (median per position, noise, crosstalk) for each estimator. Paste that table back.
 
-Keys:  G guided check   M mirror   V video on/off   R reset traces   Q / Esc quit
+Keys:  G guided check   M mirror   V video on/off   R reset traces   Y take camera back   Q / Esc quit
+
+Camera events (another app started using the camera, sharing probe results) are printed to the
+terminal with the notification text the app will show.
 
 Usage: .venv\\Scripts\\python.exe tools\\debug_pose.py [--backend msmf|dshow] [--fps 15] [--guided]
 """
@@ -180,7 +183,9 @@ def draw_video(canvas, frame, pts, mirror: bool, show_video: bool) -> None:
         cv2.circle(view, (int(xs[i]), int(ys[i])), 4, (0, 255, 255), -1)
 
 
-def draw_panel(canvas, sample: P.PoseSample | None, cpu: CpuMeter, mirror: bool, show_video: bool) -> None:
+def draw_panel(
+    canvas, sample: P.PoseSample | None, cpu: CpuMeter, mirror: bool, show_video: bool, camera_line: str = ""
+) -> None:
     x0 = VIDEO_W + 12
     panel = canvas[:, VIDEO_W:]
     panel[:] = 32
@@ -195,6 +200,7 @@ def draw_panel(canvas, sample: P.PoseSample | None, cpu: CpuMeter, mirror: bool,
         line("starting capture...")
         return
     colors = {
+        "yielded": (255, 120, 200),
         "tracking": (80, 220, 80),
         "lost": (0, 200, 255),
         "no_face": (0, 140, 255),
@@ -204,6 +210,8 @@ def draw_panel(canvas, sample: P.PoseSample | None, cpu: CpuMeter, mirror: bool,
     line(f"camera: {sample.camera or '-'}")
     line(f"processed {sample.fps:4.1f} fps   inference {sample.infer_ms:5.1f} ms")
     line(cpu.text())
+    if camera_line:
+        line(camera_line, 0.45, (200, 200, 120), 18)
     if sample.message:
         for chunk in [sample.message[i : i + 60] for i in range(0, min(len(sample.message), 240), 60)]:
             line(chunk, 0.45, (0, 200, 255), 18)
@@ -228,7 +236,7 @@ def draw_panel(canvas, sample: P.PoseSample | None, cpu: CpuMeter, mirror: bool,
     put(
         canvas,
         f"G guided  M mirror({'on' if mirror else 'off'})  V video({'on' if show_video else 'off'})  "
-        "R reset  Q quit",
+        "R reset  Y take cam  Q quit",
         (x0, y),
         0.42,
         (170, 170, 170),
@@ -316,7 +324,22 @@ def main() -> int:
     )
     poses: LatestSlot[P.PoseSample] = LatestSlot()
     frames: LatestSlot = LatestSlot()
-    capture = CaptureThread(settings, poses, debug_hook=lambda f, p, s: frames.put((f, p, s)))
+    last_event = [""]
+
+    def on_event(kind: str, info: dict) -> None:
+        if kind == "sharing":
+            print(f"[camera sharing] {info['state']} (probe; MEPSGFlag hint={info.get('hint')})", flush=True)
+        elif kind in ("yielded", "busy"):
+            print(f"[{kind}] NOTIFICATION: {info['title']}", flush=True)
+            print(f"    {info['body']}", flush=True)
+            last_event[0] = f"{kind}: {', '.join(info.get('apps', []))}"
+        elif kind == "resumed":
+            print(f"[resumed] manual={info.get('manual')} apps={info.get('apps', [])}", flush=True)
+            last_event[0] = "resumed" + (" (manual)" if info.get("manual") else "")
+
+    capture = CaptureThread(
+        settings, poses, debug_hook=lambda f, p, s: frames.put((f, p, s)), on_event=on_event
+    )
     capture.start()
 
     canvas = np.zeros((VIDEO_H + PLOT_H, VIDEO_W + PANEL_W, 3), np.uint8)
@@ -346,14 +369,17 @@ def main() -> int:
                         guided.feed(now, fsample)
                 if want_guided and fsample.pose is not None and guided is None:
                     guided, want_guided = Guided(), False
-            if sample is not None and sample.status in ("error", "opening", "paused", "stopped"):
+            if sample is not None and sample.status in ("error", "opening", "paused", "yielded", "stopped"):
                 frame = pts = None
             while trace and now - trace[0][0] > 10.0:
                 trace.popleft()
             cpu.update()
 
             draw_video(canvas, frame, pts, mirror, show_video)
-            draw_panel(canvas, sample, cpu, mirror, show_video)
+            cam_line = f"camera sharing: {capture.sharing.value}" + (
+                f"   last event: {last_event[0]}" if last_event[0] else ""
+            )
+            draw_panel(canvas, sample, cpu, mirror, show_video, cam_line)
             draw_traces(canvas, trace, now)
             if guided is not None:
                 if guided.state(now) is None:
@@ -377,6 +403,8 @@ def main() -> int:
                 trace.clear()
             elif key == ord("g"):
                 guided = Guided()
+            elif key == ord("y"):
+                capture.resume_from_yield()
     except KeyboardInterrupt:
         pass
     finally:
