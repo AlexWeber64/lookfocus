@@ -3,7 +3,7 @@
 Look at a monitor and just type: LookFocus uses your webcam to work out which monitor you are facing and moves
 keyboard focus to the window you last used on that monitor. Windows 11, runs from the tray, fully offline.
 
-> Status: **M2 (calibration + classifier) done, awaiting hardware check.** Not usable yet. Full setup, tuning
+> Status: **M3 (focus switching) done, awaiting hardware check.** Not usable yet. Full setup, tuning
 > and limitations docs land in M6.
 
 ## Privacy

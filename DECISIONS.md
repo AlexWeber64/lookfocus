@@ -463,3 +463,57 @@ of the run was still in flight and the state was UNKNOWN, which was treated as O
 - Also from the user's run: `explorer.exe` opened the camera briefly during a Windows Camera session (maybe
   the shell's camera preview or privacy UI). It simply joins the blockers while yielded. Display names:
   WindowsCamera → "Windows Camera", explorer → "Windows Explorer".
+
+## M3 — focus switching
+
+### D-027 Target selection **[unit-tested; tracker wired in M4]**
+- `targeting.choose_target` (pure): the window last active on the display (remembered by
+  `windows_focus.ForegroundTracker`, 4 Hz `GetForegroundWindow` polling) if it still exists, is eligible and
+  its centre is still on that display; else the topmost eligible window there (`EnumWindows` order); else
+  nothing (do nothing).
+- **Minimized windows are never targets.** They aren't "on" a display, and restoring a window the user
+  minimized because they glanced at its monitor would be surprising. The ladder's restore stage still exists
+  (the spec's stage 1) for targets minimized between selection and activation, and `focus_test
+  --minimize-every` exercises it.
+- Eligibility (`windows_focus.is_candidate`, Alt-Tab-like): visible, not DWM-cloaked (suspended UWP apps,
+  other virtual desktops), not a child, not `WS_EX_NOACTIVATE`, not a tool window unless `WS_EX_APPWINDOW`,
+  unowned (or `WS_EX_APPWINDOW`), not LookFocus's own process, not shell surfaces (`Progman`, `WorkerW`,
+  taskbars, `Windows.UI.Core.CoreWindow` flyouts, task view / Alt-Tab hosts, `ForegroundStaging`, ...).
+  **Disabled** owners stay eligible (a modal dialog is open): activation goes to
+  `GetLastActivePopup(root owner)`, so the dialog gets focus.
+- Window → display by the centre of the DWM extended frame bounds (`GetWindowRect` includes invisible
+  resize borders on Windows 10+); the normal-position rect for minimized windows. Works for zones.
+- Verified on the dev desktop: Windows Terminal, Firefox, Explorer, Electron apps, WinUI 3, Win32, UWP
+  (`ApplicationFrameWindow`) and an elevated `ConsoleWindowClass` PowerShell enumerate correctly; minimized
+  windows are flagged. Elevation is read from the process token (`TokenElevation`); the elevated
+  PowerShell read as elevated=True from a non-elevated process.
+
+### D-028 Activation ladder: measured on this machine **[verified with Explorer pairs; full matrix pending]**
+- The ladder is pure (`targeting.activate` with an injectable `FocusApi`; 10 unit tests with a fake Windows),
+  with every stage verified by polling `GetForegroundWindow` for up to 500 ms (root-owner comparison).
+  Return values are recorded but never trusted; the test confirms `SetForegroundWindow` returns True
+  while doing nothing.
+- `AttachThreadInput` attaches the current thread to both the foreground thread and the target's, then
+  `BringWindowToTop` + `SetForegroundWindow`, detaching in `finally`. The synthetic tap uses VK 0xE8
+  (documented unassigned; AutoHotkey uses it as its menu-mask key for the same reason). A lone Alt tap is
+  last and can be disabled (`--no-alt`).
+- **Measured (two Explorer windows in zones, LookFocus as a background process, foreground lock timeout
+  200000 ms):**
+  - full ladder, 6 switches: plain `SetForegroundWindow` worked once (the first switch) and then failed
+    5/5, each costing the full ~510 ms wait; `attach_thread_input` worked **5/5 in 0 ms**.
+  - starting at `attach_thread_input` with every 3rd target minimized first, 8 switches: attach 6/6 in
+    0–1 ms; restore 2/2 in 0 ms (`SW_RESTORE` activated the window by itself). Keyboard focus
+    (`GetGUIThreadInfo.hwndFocus`) landed in the target in 14/14 switches.
+- → Plan for M4: the daemon's focus executor **learns its first stage** (skip stages that keep failing
+  while a later one works, re-probe the full ladder occasionally). That avoids a ~0.5 s delay and the
+  taskbar flash a refused `SetForegroundWindow` causes. `focus_test` defaults to the full spec ladder so
+  it measures every stage.
+- **Elevated windows:** if the ladder fails and the target (or the current foreground window) belongs to a
+  process whose token can't be read or reads elevated, while LookFocus isn't elevated, the failure is
+  reported as UIPI with the `--elevated` hint. `--elevated` relaunches via `ShellExecuteW("runas")` (UAC
+  prompt); there is no UIAccess. **[unverified until the user runs it]**
+- `focus_test` safety: once focus moves, the terminal can't receive Ctrl+C, so the test aborts if the
+  pointer moves more than 40 px or a mouse button is pressed (mouse-button state only; never the keyboard).
+  Reports are also written to `%APPDATA%\LookFocus\focus_test_last.txt` (text only).
+- Noted for M4: the user runs "Move Mouse" (a keep-awake jiggler). Synthetic pointer moves look like
+  mouse activity to `GetCursorPos`/`GetLastInputInfo` and could hold off switching, or abort focus_test.

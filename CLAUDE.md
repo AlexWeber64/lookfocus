@@ -42,12 +42,14 @@ py -3.12 -m venv .venv
 .venv\Scripts\python.exe tools\net_audit.py [--seconds 60 --tail 20]
 .venv\Scripts\python.exe tools\cam_share_test.py        # can a 2nd app use the camera meanwhile?
 .venv\Scripts\python.exe tools\debug_pose.py [--guided]  # live pose viewer; --seconds N auto-quits
+.venv\Scripts\python.exe toolsocus_test.py --zones 2 --windows QUERY QUERY  # focus ladder test
+.venv\Scripts\python.exe -m lookfocus.camera_activity  # live per-process camera use
 ```
 
 ## Layout
 - `src/lookfocus/` — package. Pure (no Win32/cv2, unit-tested): pose, displays, calibration, classifier,
-  the policy parts of camera_usage. Windows: monitors, overlay, camera_enum, camera_sharing, capture,
-  calibrator. CLI: main (`python -m lookfocus`).
+  camera_usage (policy), targeting (window choice + activation ladder). Windows: monitors, overlay, camera_enum, camera_sharing, camera_activity,
+  capture, calibrator, windows_focus. CLI: main (`python -m lookfocus`).
 - `tools/` — dev/debug scripts (cam_probe, cam_share_test, net_audit, debug_pose; focus_test in M3)
 - `tests/` — pytest; hardware-free except for Windows-only checks that skip elsewhere
 - `models/face_landmarker.task` — committed, sha256-checked (see `models/SOURCE.md`)
