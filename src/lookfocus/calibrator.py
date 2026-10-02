@@ -52,6 +52,7 @@ class Calibrator:
         say: Callable[[str], None] = print,
     ) -> None:
         self.slot, self.ov, self.s, self.say = slot, overlay, settings, say
+        self.frames: dict[tuple[int, int], int] = {}  # native camera frame sizes seen while collecting
 
     def _pump(self, seconds: float) -> None:
         if not self.ov.pump(seconds):
@@ -98,6 +99,7 @@ class Calibrator:
                     seen = seq
                     if sample.pose is not None:
                         samples.append(features(sample.pose))
+                        self.frames[sample.frame] = self.frames.get(sample.frame, 0) + 1
             point = C.summarize_point(name, fx, fy, samples, primary=self.s.source)
             spread = point.spread.get(self.s.source, (float("inf"),) * 2)
             if point.n >= self.s.min_samples and max(spread) <= self.s.max_spread:
@@ -144,7 +146,8 @@ class Calibrator:
             out.append(C.DisplayCalibration(d.id, d.label, d.rect, pts))
         self.ov.set_scene(title="Calibration done", lines=["Results are in the terminal."])
         self._pump(0.8)
-        return C.Calibration(out, zones=zones)
+        camera = max(self.frames, key=self.frames.get) if self.frames else None
+        return C.Calibration(out, zones=zones, camera=camera if camera and camera[0] else None)
 
 
 # Centres closer than this many times the per-dot noise can't be switched between reliably.

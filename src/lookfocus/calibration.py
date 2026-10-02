@@ -134,6 +134,10 @@ class Calibration:
     zones: int = 0
     created: str = field(default_factory=lambda: dt.datetime.now().isoformat(timespec="seconds"))
     version: int = VERSION
+    # Native camera frame size during calibration. Poses depend on the camera mode (Windows' shared
+    # multi-app stream is 2560x1440 here, the exclusive 640x480 mode may crop differently), so a change
+    # is worth a recalibration prompt. None for calibrations made before this was recorded.
+    camera: tuple[int, int] | None = None
 
     @property
     def display_ids(self) -> list[str]:
@@ -144,6 +148,7 @@ class Calibration:
             "version": self.version,
             "created": self.created,
             "zones": self.zones,
+            "camera": list(self.camera) if self.camera else None,
             "displays": [d.to_json() for d in self.displays],
         }
 
@@ -151,11 +156,16 @@ class Calibration:
     def from_json(cls, d: dict) -> Calibration:
         if int(d.get("version", 0)) != VERSION:
             raise ValueError(f"unsupported calibration version {d.get('version')!r}")
+        cam = d.get("camera")
         return cls(
             displays=[DisplayCalibration.from_json(x) for x in d["displays"]],
             zones=int(d.get("zones", 0)),
             created=str(d.get("created", "")),
+            camera=(int(cam[0]), int(cam[1])) if cam else None,
         )
+
+    def camera_mismatch(self, frame: tuple[int, int]) -> bool:
+        return bool(self.camera) and bool(frame[0]) and tuple(frame) != tuple(self.camera)
 
     def check_layout(self, displays: list[LogicalDisplay]) -> tuple[list[str], list[str]]:
         """(calibrated-but-missing, present-but-uncalibrated) display ids. Both empty = layout unchanged."""

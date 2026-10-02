@@ -34,7 +34,8 @@ LONG_PTR = ctypes.c_ssize_t
 
 GA_ROOTOWNER = 3
 GWL_STYLE, GWL_EXSTYLE = -16, -20
-WS_CHILD = 0x40000000
+WS_CHILD, WS_CAPTION = 0x40000000, 0x00C00000
+WS_EX_TOPMOST = 0x00000008
 WS_EX_TOOLWINDOW, WS_EX_APPWINDOW, WS_EX_NOACTIVATE = 0x00000080, 0x00040000, 0x08000000
 DWMWA_EXTENDED_FRAME_BOUNDS, DWMWA_CLOAKED = 9, 14
 SW_MINIMIZE, SW_RESTORE = 6, 9
@@ -299,6 +300,13 @@ def window_info(hwnd) -> WindowInfo:
     )
 
 
+def looks_like_popup(style: int, ex: int) -> bool:
+    """Tray notifications and similar toasts: topmost, no title bar, and not flagged for the taskbar.
+    (Picked as a target in an M4 dry run: 'Malwarebytes Tray Notification', D-031.) Frameless app windows
+    such as WPF tools keep WS_EX_APPWINDOW and stay eligible."""
+    return not style & WS_CAPTION and not ex & WS_EX_APPWINDOW and bool(ex & WS_EX_TOPMOST)
+
+
 def is_candidate(hwnd, own_pid: int | None = None) -> bool:
     """Alt-Tab-style eligibility: a visible, un-cloaked, activatable top-level app window that isn't a
     shell surface or one of LookFocus's own windows."""
@@ -314,6 +322,8 @@ def is_candidate(hwnd, own_pid: int | None = None) -> bool:
     if style & WS_CHILD or ex & WS_EX_NOACTIVATE:  # disabled owners (modal dialog open) stay eligible
         return False
     if ex & WS_EX_TOOLWINDOW and not ex & WS_EX_APPWINDOW:
+        return False
+    if looks_like_popup(style, ex):
         return False
     if root_owner(hwnd) != hwnd and not ex & WS_EX_APPWINDOW:
         return False  # owned popups are reached through their owner (GetLastActivePopup at activation)

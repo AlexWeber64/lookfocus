@@ -157,3 +157,33 @@ def activate(
             return result
     result.reason = "no stage brought the window to the foreground"
     return result
+
+
+@dataclass
+class StageLearner:
+    """Picks the ladder's first stage per window class from what recently worked.
+
+    Measured (D-028/D-030): Win32 apps need AttachThreadInput (a plain SetForegroundWindow is refused and
+    costs the full 500 ms verification, plus a taskbar flash), while UWP frames take SetForegroundWindow.
+    So: start at the earliest stage that won among the last `history` successes for that class; with no
+    history, and on every `reprobe_every`-th switch, run the full ladder to re-learn.
+    """
+
+    history: int = 6
+    reprobe_every: int = 25
+    _wins: dict[str, list[str]] = field(default_factory=dict)
+    _count: dict[str, int] = field(default_factory=dict)
+
+    def first_stage(self, key: str) -> str:
+        n = self._count.get(key, 0)
+        wins = self._wins.get(key, [])
+        if not wins or n % self.reprobe_every == 0:
+            return STAGES[0]
+        return min(wins, key=STAGES.index)
+
+    def record(self, key: str, act: Activation) -> None:
+        self._count[key] = self._count.get(key, 0) + 1
+        if act.ok and act.stage in STAGES and act.stage != "restore":
+            wins = self._wins.setdefault(key, [])
+            wins.append(act.stage)
+            del wins[: -self.history]

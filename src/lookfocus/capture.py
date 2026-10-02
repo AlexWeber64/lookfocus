@@ -191,6 +191,7 @@ class CameraError(RuntimeError):
 FRESH_READ_S = 0.008
 MAX_DRAIN = 4
 NO_FRAMES = "opened but delivered no frames"
+RAW_UNSUPPORTED = "raw frames are not NV12"
 # A camera held by another app can still "open" and trickle out a frame a second (DSHOW, measured), so an
 # open only counts once this many real frames arrive within first_frames_timeout_s (a free camera does
 # that in well under half a second).
@@ -213,6 +214,8 @@ class CameraSource:
         self.path = ""
         self.busy = False  # last open failed only because no device delivered frames
         self.tried_keys: set[str] = set()  # device keys the last open() attempted (for busy detection)
+        self.native: tuple[int, int] = (0, 0)  # frame size the camera actually delivers
+        self.raw_nv12 = False  # fast path: raw NV12 from MSMF, converted (and shrunk) only when processed
 
     def open(self) -> None:
         """Pick, open and verify a camera, or raise CameraError explaining every attempt."""
@@ -238,14 +241,33 @@ class CameraSource:
                     problems.append(f"{label}: {res.error}")
                     other_failures += 1
                     continue
+                self._choose_mode(res.cap, backend)
                 verdict = self._verify(res.cap)
+                if verdict == RAW_UNSUPPORTED:  # raw frames weren't NV12: reopen with normal conversion
+                    log.info("%s: raw frames aren't NV12; using converted frames", label)
+                    res.cap.release()
+                    res = open_camera(
+                        idx, backend, width=s.width, height=s.height, timeout_s=s.open_timeout_s
+                    )
+                    if not res.ok:
+                        problems.append(f"{label}: {res.error}")
+                        other_failures += 1
+                        continue
+                    self._choose_mode(res.cap, backend, allow_raw=False)
+                    verdict = self._verify(res.cap)
                 if verdict == "ok":
                     self.cap = res.cap
                     self.description = label
                     self.backend, self.index = backend, idx
                     self.name, self.path = (dev.name, dev.path) if dev else ("", "")
                     self.busy = False
-                    log.info("camera open: %s (%.2fs)", label, res.open_s)
+                    log.info(
+                        "camera open: %s (%.2fs), native %dx%d%s",
+                        label,
+                        res.open_s,
+                        *self.native,
+                        ", raw NV12 fast path" if self.raw_nv12 else "",
+                    )
                     return
                 res.cap.release()
                 problems.append(f"{label}: {verdict}")
@@ -264,9 +286,15 @@ class CameraSource:
         t_end = time.monotonic() + self.settings.first_frames_timeout_s
         stats: list[FrameStats] = []
         prev = None
+        wrong_format = 0
         while time.monotonic() < t_end and len(stats) < VERIFY_FRAMES:
-            ok, frame = cap.read()
-            if not ok or frame is None:
+            ok, raw = cap.read()
+            frame = self._decode(raw) if ok and raw is not None else None
+            if frame is None:
+                if ok and raw is not None and self.raw_nv12:
+                    wrong_format += 1
+                    if wrong_format >= 3:
+                        return RAW_UNSUPPORTED
                 time.sleep(0.02)
                 continue
             th = thumbnail(frame)
@@ -280,8 +308,34 @@ class CameraSource:
             return "greyscale frames (IR / Windows Hello sensor?), skipped"
         return "ok"
 
+    def _choose_mode(self, cap: cv2.VideoCapture, backend: str, allow_raw: bool = True) -> None:
+        """With Windows' multi-app camera setting on, every app gets the shared stream at the resolution
+        chosen in camera settings (2560x1440 on the dev machine), whatever it asks for. MSMF then converts
+        every 30 fps frame to RGB in software (HW transforms are off): ~90% of a core. Raw NV12 instead,
+        converted only for processed frames straight to ~640 px wide, costs ~1.7 ms each (D-031).
+        Must happen before the first read: switching later keeps the RGB media type and just hands over raw
+        RGB32 buffers. cap.set() returns False even when it works, so _verify checks the frames."""
+        w, h = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self.native, self.raw_nv12 = (w, h), False
+        big = w * h > 1.5 * self.settings.width * self.settings.height
+        if allow_raw and backend == "msmf" and big:
+            cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)
+            self.raw_nv12 = True
+
+    def _decode(self, frame: np.ndarray) -> np.ndarray | None:
+        """Camera buffer -> BGR at most settings.width wide; None for a buffer in an unexpected format."""
+        w, h = self.native
+        if self.raw_nv12:
+            if frame.size != w * h * 3 // 2:
+                return None
+            return nv12_to_bgr(frame, w, h, self.settings.width)
+        if frame.ndim != 3:
+            return None
+        return shrink(frame, self.settings.width)
+
     def read_fresh(self) -> np.ndarray | None:
-        """Drop frames the backend already buffered (possibly old), then return the next one."""
+        """Drop frames the backend already buffered (possibly old), then return the next one as BGR, no
+        wider than settings.width."""
         if self.cap is None:
             return None
         for _ in range(MAX_DRAIN):
@@ -291,12 +345,32 @@ class CameraSource:
             if time.perf_counter() - t > FRESH_READ_S:
                 break
         ok, frame = self.cap.retrieve()
-        return frame if ok else None
+        if not ok or frame is None:
+            return None
+        return self._decode(frame)
 
     def release(self) -> None:
         if self.cap is not None:
             self.cap.release()
             self.cap = None
+
+
+def shrink(frame: np.ndarray, max_width: int) -> np.ndarray:
+    h, w = frame.shape[:2]
+    if w <= max_width * 1.25:
+        return frame
+    return cv2.resize(frame, (max_width, round(h * max_width / w)), interpolation=cv2.INTER_AREA)
+
+
+def nv12_to_bgr(raw: np.ndarray, w: int, h: int, max_width: int) -> np.ndarray:
+    """Raw NV12 buffer -> BGR about max_width wide: area-averaged luma, subsampled (half-res) chroma."""
+    buf = raw.reshape(h * 3 // 2, w)
+    k = max(1, w // max_width)
+    if k > 1 and w % (2 * k) == 0 and h % (2 * k) == 0:
+        y = cv2.resize(buf[:h], (w // k, h // k), interpolation=cv2.INTER_AREA)
+        uv = buf[h:].reshape(h // 2, w // 2, 2)[::k, ::k].reshape(h // (2 * k), w // k)
+        return cv2.cvtColor(np.ascontiguousarray(np.vstack([y, uv])), cv2.COLOR_YUV2BGR_NV12)
+    return shrink(cv2.cvtColor(buf, cv2.COLOR_YUV2BGR_NV12), max_width)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -672,6 +746,7 @@ class CaptureThread(threading.Thread):
                 infer_ms=infer_ms,
                 camera=source.description,
                 message=message,
+                frame=source.native,
             )
             self.slot.put(sample)
             if self.debug_hook is not None:

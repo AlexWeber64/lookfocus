@@ -81,6 +81,7 @@ class PoseSample:
     infer_ms: float = 0.0
     camera: str = ""
     message: str = ""
+    frame: tuple[int, int] = (0, 0)  # native camera frame size (calibration is tied to the camera mode)
 
 
 def detect_layout(m: np.ndarray, tol: float = 1e-3) -> Layout:

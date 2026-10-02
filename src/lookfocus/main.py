@@ -146,12 +146,22 @@ def cmd_watch(args) -> int:
     capture = CaptureThread(_capture_settings(args), slot, on_event=on_event)
     capture.start()
     last = None
+    frame_seen = (0, 0)
     seen = 0
     try:
         while capture.is_alive():
             seen, s = slot.wait_newer(seen, 1.0)
             if s is None:
                 continue
+            if s.frame != frame_seen:
+                frame_seen = s.frame
+                if cal.camera_mismatch(s.frame):
+                    print(
+                        f"Note: the camera now delivers {s.frame[0]}x{s.frame[1]} but calibration used "
+                        f"{cal.camera[0]}x{cal.camera[1]} (camera-sharing setting changed?). If results look "
+                        "off, recalibrate.",
+                        flush=True,
+                    )
             if s.pose is None:
                 state, detail = f"- ({s.status})", s.message
             else:
@@ -178,6 +188,112 @@ def cmd_camera_sharing(args) -> int:
 
     camera_sharing.run_setup_step(_capture_settings(args))
     return 0
+
+
+def cmd_run(args) -> int:
+    """The full engine in a console (the tray app wraps the same Daemon in M5)."""
+    import time
+
+    from lookfocus import windows_focus as wf
+    from lookfocus.daemon import Daemon, DaemonSettings
+    from lookfocus.decision import DecisionSettings
+
+    if args.elevated and not wf.we_are_elevated():
+        argv = [a for a in sys.argv[1:] if a != "--elevated"]
+        if wf.relaunch_elevated(["-m", "lookfocus", *argv]):
+            print("Relaunched as administrator in a new window.")
+            return 0
+        print("Elevation was cancelled or failed.")
+        return 1
+    cal = C.load(Path(args.calibration))
+    if cal is None:
+        print(f"No calibration at {args.calibration}. Run `lookfocus calibrate` first.")
+        return 1
+    zones = cal.zones if args.zones is None else args.zones
+    ds = _displays(zones)
+    missing, added = cal.check_layout(ds)
+    if missing or added:
+        print("The display layout changed since calibration; run `lookfocus calibrate` again.")
+        return 1
+    settings = DaemonSettings(
+        zones=zones,
+        pose_source=args.pose_source,
+        none_margin=args.none_margin,
+        decision=DecisionSettings(
+            dwell_s=args.dwell_ms / 1000,
+            typing_dwell_s=args.typing_dwell_ms / 1000,
+            typing_grace_s=args.typing_grace_ms / 1000,
+            mouse_grace_s=args.mouse_grace_ms / 1000,
+            hysteresis=args.hysteresis,
+        ),
+        capture=_capture_settings(args, fps=args.fps),
+        move_cursor_on_switch=args.move_cursor,
+        allow_alt=not args.no_alt,
+        dry_run=args.dry_run,
+    )
+
+    def stamp() -> str:
+        return dt.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+
+    def on_status(status: str, detail: str) -> None:
+        print(f"{stamp()} [{status}] {detail}", flush=True)
+
+    def on_event(kind: str, info: dict) -> None:
+        if kind == "switched":
+            print(
+                f"{stamp()} -> {info['display']}: {info['window']} ({info['stage']}, {info['ms']:.0f} ms)",
+                flush=True,
+            )
+        elif kind in ("camera_yielded", "camera_busy"):
+            print(f"{stamp()} NOTIFICATION {info['title']}: {info['body']}", flush=True)
+        else:
+            print(f"{stamp()} {kind}: {info}", flush=True)
+
+    d = Daemon(settings, cal, on_status=on_status, on_event=on_event)
+    mode = " (dry run: no focus changes)" if args.dry_run else ""
+    elev = "elevated" if wf.we_are_elevated() else "not elevated"
+    print(f"LookFocus running on {len(ds)} displays{mode}, {elev}. Ctrl+C to stop.")
+    d.start()
+    try:
+        if args.stats:
+            _print_stats(d, stamp)
+        else:
+            while True:
+                time.sleep(0.5)
+    except KeyboardInterrupt:
+        print("stopping...")
+    finally:
+        d.stop()
+    return 0
+
+
+def _print_stats(d, stamp, every: float = 10.0) -> None:
+    """Every `every` s: whole-process CPU (all threads incl. mediapipe's), processed fps, inference time."""
+    import os
+    import statistics
+    import time
+
+    seen, n, faces, infer = 0, 0, 0, []
+    c0, w0 = time.process_time(), time.perf_counter()
+    while True:
+        seen, s = d.poses.wait_newer(seen, 0.5)
+        if s is not None and s.status in ("tracking", "lost", "no_face"):
+            n += 1
+            if s.pose is not None:
+                faces += 1
+                infer.append(s.infer_ms)
+        wall = time.perf_counter() - w0
+        if wall >= every:
+            cpu = (time.process_time() - c0) / wall * 100
+            ncpu = os.cpu_count() or 1
+            inf = f", inference {statistics.median(infer):.1f} ms" if infer else ""
+            print(
+                f"{stamp()} stats: CPU {cpu / ncpu:.1f}% of the machine ({cpu:.0f}% of one core), "
+                f"{n / wall:.1f} frames/s processed, face in {100 * faces / max(n, 1):.0f}%{inf}",
+                flush=True,
+            )
+            n, faces, infer = 0, 0, []
+            c0, w0 = time.process_time(), time.perf_counter()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -211,6 +327,22 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("camera-sharing", help="check Windows' multi-app camera setting")
     common(p, 0)
     p.set_defaults(func=cmd_camera_sharing)
+
+    p = sub.add_parser("run", help="run LookFocus in this console (switches focus)")
+    common(p, None)
+    p.add_argument("--dry-run", action="store_true", help="decide and report, but never move focus")
+    p.add_argument("--stats", action="store_true", help="print CPU / fps / inference time every 10 s")
+    p.add_argument("--fps", type=float, default=15.0)
+    p.add_argument("--dwell-ms", type=float, default=300)
+    p.add_argument("--typing-dwell-ms", type=float, default=1000)
+    p.add_argument("--typing-grace-ms", type=float, default=2000)
+    p.add_argument("--mouse-grace-ms", type=float, default=1500)
+    p.add_argument("--hysteresis", type=float, default=2.0, help="extra turn needed to leave a display")
+    p.add_argument("--none-margin", type=float, default=6.0, help="how far outside all displays is none")
+    p.add_argument("--move-cursor", action="store_true", help="also move the pointer to the new display")
+    p.add_argument("--no-alt", action="store_true", help="never use the Alt-tap activation fallback")
+    p.add_argument("--elevated", action="store_true", help="relaunch as administrator (UAC prompt)")
+    p.set_defaults(func=cmd_run)
     return ap
 
 

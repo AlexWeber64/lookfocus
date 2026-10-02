@@ -571,3 +571,81 @@ All runs console-less (like the daemon) unless noted; 24 switches each; zone mod
   window class instead of globally.
 - No menu-bar activation or other side effects were reported; the Alt stage was never reached in a
   successful run.
+
+## M4 — the engine
+
+### D-031 CPU: the camera was sending 2560×1440; raw NV12 fast path **[verified]**
+- First full-engine measurement (dry run, face tracked 367/367 frames, 15 fps): **10.1% of the machine**
+  (80.7% of one core), over the target. Root cause: with "Allow multiple apps to use camera at the same
+  time" ON, Windows serves every app the shared stream at the resolution chosen in camera settings
+  (**2560×1440** here) and ignores the requested 640×480. MSMF then converts every 30 fps 3.7 MP frame
+  to RGB in software (HW transforms are off): **89.6% of one core just to read**. The face tracker was
+  also fed 11 MB frames (32.8 ms CPU per frame at 2560×1440 vs 6.2 ms at 640×360, no face). The earlier
+  8.8% figure (D-017) was inflated the same way.
+- Fix (`CameraSource._choose_mode`): for MSMF frames larger than the processing size, switch to **raw
+  NV12** (`CAP_PROP_CONVERT_RGB=0`) **before the first read**; switching later keeps the RGB media type and
+  only hands over raw RGB32 buffers (measured). Buffered frames are drained without copying. Only the
+  processed frame is converted, straight to 640 px wide (area-averaged luma, subsampled chroma: 1.7 ms,
+  vs 5.4 ms to convert full size then resize). `cap.set()` returns False even when the switch works, so
+  `_verify` decides from the frames themselves, and reopens without raw mode if they aren't NV12-sized.
+  Other large frames (DSHOW) are shrunk with INTER_AREA.
+- Raw NV12 read at 30 fps: 24% of one core (vs 89.6%). Fast-path output vs MF's own conversion of the same
+  scene: 0.9/255 mean difference, channels in the right order. Synthetic NV12 tests cover the converter.
+- Engine CPU after the fix, no face in view (idle mode, ~2.6 frames/s): **1.4% of the machine**.
+  **With a face tracked at 15 fps: [pending: the user wasn't at the camera]**. `lookfocus run --stats`
+  prints it every 10 s.
+- Consequence: **calibration is tied to the camera mode.** Turning the sharing setting off brings back the
+  640×480 (4:3) mode, which may have a different field of view or crop, shifting every pose. Calibrations
+  now record the native frame size; `run` and `watch` warn when it changes. Calibrations made before this
+  have no size and get no warning.
+
+### D-032 Decision state machine **[21 scripted-stream tests]**
+`decision.DecisionMachine` (pure; `now` passed in) consumes one `Observation` per processed frame: the
+classified display, NONE ("facing no display") or None (no face), the classifier's per-display distances,
+and mouse / keyboard activity times. It returns a display id only when the faced display changes.
+- Dwell 300 ms; 1 s if the keyboard was used within 2 s (typing). Mouse movement or clicks block
+  switching and for 1.5 s after; the dwell starts counting only once the guard lifts, so after mouse use
+  the user still needs a full dwell on the other display.
+- Hysteresis (default 2.0 normalized classifier units, ≈3–4° here): a different display only counts if
+  its distance beats the current display's by the margin. Entering a display from "none" or no-face isn't
+  penalised beyond normal classification. Tested: poses wobbling either side of a bezel for 4 s → no
+  switch.
+- Gap tolerance 150 ms: one stray frame (noise, a dropped detection, a frame classified back onto the
+  current display) doesn't reset a dwell in progress.
+- "none" (phone, desk) and no-face keep the current display: looking back at it emits nothing (the spec's
+  "only on change, never repeated").
+- The current display is **seeded** from the foreground window's display at start and on resume, so
+  LookFocus doesn't jump when started or unpaused; it switches when the user next looks elsewhere.
+- Manual focus changes (click, Alt-Tab) don't move the decision's "current display": events follow what
+  the user *faces*, so LookFocus never fights a deliberate click while the user keeps looking at the same
+  display.
+
+### D-033 Input activity without hooks **[8 tests]**
+`inputactivity.InputTracker` (pure) + `InputPoller` (40 ms): `GetLastInputInfo`, `GetCursorPos`, and
+`GetAsyncKeyState` for the three mouse buttons only. Keyboard activity = a new input event not explained by
+the pointer moving or a button (within 60 ms). Details:
+- The first poll only sets a baseline (input from before LookFocus started is unknown).
+- Pointer moves under 4 px are "touched" (they explain the input event) but not "mouse use". The user's
+  "Move Mouse" jiggler therefore neither blocks switching nor reads as typing.
+- LookFocus's own injected key taps are excluded with an ignore window around each activation, and its own
+  pointer move (`--move-cursor`) resets the baseline.
+- Known blind spot: wheel scrolling moves no pointer, so it reads as typing (it only lengthens the dwell).
+
+### D-034 Stage learner **[6 tests]**
+`targeting.StageLearner`, keyed by window class: start the ladder at the earliest stage that won among the
+last 6 successes for that class; the full ladder with no history and on every 25th switch. This follows
+D-030: Win32 classes learn `attach_thread_input`, which avoids the ~0.5 s refused-SetForegroundWindow wait
+and taskbar flash; UWP frames keep `set_foreground`. Restore (minimized targets) always runs.
+
+### D-035 Engine wiring **[verified in dry runs]**
+`daemon.Daemon` threads: capture → LatestSlot → decision loop → one-slot FocusExecutor (a newer request
+replaces one that hasn't started); input poller; 4 Hz foreground tracker; display layout re-checked every
+5 s (a mismatch with the calibration pauses switching and emits `layout_changed`).
+- Only *fresh* frames are classified. A 100 ms wait timeout with no new frame is a gap, so a stalled camera
+  can't complete a dwell on a stale pose.
+- Target selection excludes topmost, caption-less, non-taskbar pop-ups: a dry run picked "Malwarebytes Tray
+  Notification" as the window to focus.
+- `lookfocus run [--dry-run] [--stats] [--move-cursor] [--no-alt] [--elevated]` runs it in a console with
+  the tuning flags. The tray, config file, hotkey and lock/sleep handling wrap the same Daemon in M5.
+- Dry run with the user present (before the fast path): adopted Zone 1 silently at start, then one switch
+  decision when the user turned to Zone 2; camera-sharing probe ON.

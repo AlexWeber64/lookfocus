@@ -1,7 +1,15 @@
 import pytest
 
 from lookfocus.displays import Monitor, Rect, build_displays
-from lookfocus.targeting import VK_MENU, VK_UNASSIGNED, WindowInfo, activate, choose_target
+from lookfocus.targeting import (
+    VK_MENU,
+    VK_UNASSIGNED,
+    Activation,
+    StageLearner,
+    WindowInfo,
+    activate,
+    choose_target,
+)
 
 TARGET, OTHER = 100, 200
 
@@ -167,3 +175,45 @@ class TestChooseTarget:
 
     def test_nothing_eligible(self):
         assert choose_target(RIGHT, None, [L1, L2], DS) is None
+
+
+class TestStageLearner:
+    def win(self, stage):
+        return Activation(True, stage)
+
+    def test_full_ladder_without_history(self):
+        assert StageLearner().first_stage("CabinetWClass") == "restore"
+
+    def test_skips_stages_that_never_win(self):
+        lr = StageLearner()
+        for _ in range(3):
+            lr.record("CabinetWClass", self.win("attach_thread_input"))
+        assert lr.first_stage("CabinetWClass") == "attach_thread_input"
+        assert lr.first_stage("ApplicationFrameWindow") == "restore"  # per class
+
+    def test_starts_at_earliest_recent_winner(self):
+        lr = StageLearner()
+        for st in ("set_foreground", "set_foreground", "input_unassigned_vk"):
+            lr.record("ApplicationFrameWindow", self.win(st))
+        assert lr.first_stage("ApplicationFrameWindow") == "set_foreground"
+
+    def test_forgets_old_wins(self):
+        lr = StageLearner(history=3, reprobe_every=100)
+        lr.record("X", self.win("set_foreground"))
+        for _ in range(3):
+            lr.record("X", self.win("attach_thread_input"))
+        assert lr.first_stage("X") == "attach_thread_input"
+
+    def test_periodic_full_ladder(self):
+        lr = StageLearner(reprobe_every=5)
+        for _ in range(5):
+            lr.record("X", self.win("attach_thread_input"))
+        assert lr.first_stage("X") == "restore"  # 5th switch: re-learn
+        lr.record("X", self.win("attach_thread_input"))
+        assert lr.first_stage("X") == "attach_thread_input"
+
+    def test_restore_and_failures_teach_nothing(self):
+        lr = StageLearner()
+        lr.record("X", Activation(True, "restore"))
+        lr.record("X", Activation(False, None))
+        assert lr.first_stage("X") == "restore"
