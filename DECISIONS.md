@@ -546,3 +546,28 @@ problems meant part of the matrix wasn't what it claimed:
    the stage that matters.
 - The user's `ForegroundLockTimeout` now reads 2147483647 ms (the lock never expires). It was 200000 earlier;
   some other software changed it. It doesn't change the picture above.
+
+### D-030 M3 matrix complete: what each app type needs **[verified on the user's machine]**
+All runs console-less (like the daemon) unless noted; 24 switches each; zone mode.
+
+| pair | LookFocus | result | what worked |
+|---|---|---|---|
+| VS Code ↔ Explorer (minimize every 4th) | normal | 24/24, keyboard 24/24 | SetForegroundWindow 1/18 (first switch only); **AttachThreadInput 17/17 at 0 ms**; restore 6/6 |
+| Calculator ↔ Settings (UWP) | normal | 24/24, keyboard 24/24 | **SetForegroundWindow 23/24** (0–78 ms); one switch needed the **unassigned-VK tap** after AttachThreadInput also failed |
+| Calculator ↔ Settings (UWP) | elevated | 24/24 | SetForegroundWindow 24/24 |
+| admin PowerShell ↔ Explorer (from an admin console) | elevated | 23/23 twice | AttachThreadInput 11/11 into the admin window |
+| Terminal ↔ Firefox / Explorer (in-terminal, biased, D-029) | normal | 46/46 | — |
+| **admin PowerShell ↔ Explorer** | **normal** | into admin: works (SetForegroundWindow 52 ms); **away from admin: 0/3, every stage fails** | UIPI |
+
+- **UIPI in practice:** a non-elevated LookFocus *can* move focus **into** an elevated window but can't take
+  it **away** from one. All four stages fail (~2 s wasted, plus an Alt tap aimed at an admin window,
+  which Windows drops). `focus_window` now checks first: if the foreground window's process token reads
+  elevated (True, not unknown) and LookFocus isn't elevated, it returns at once with the UIPI message
+  (verified: immediate failure, no stages run). The spec's expectation of "a clean, clearly reported
+  failure" holds for the away direction. `--elevated` (verified via the user's elevated runs) removes it.
+- **No single best stage:** Win32 apps (Explorer, VS Code, Windows Terminal) need AttachThreadInput;
+  UWP frames accept a plain SetForegroundWindow, and once that failed *and* AttachThreadInput failed
+  while the VK tap worked. So the ladder stays; the daemon's learner (M4) picks the starting stage per
+  window class instead of globally.
+- No menu-bar activation or other side effects were reported; the Alt stage was never reached in a
+  successful run.

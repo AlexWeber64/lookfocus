@@ -404,6 +404,10 @@ class Win32FocusApi:
 
 
 _API = Win32FocusApi()
+UIPI_FROM_ELEVATED = (
+    "the current foreground window belongs to an elevated (administrator) process; Windows blocks "
+    "non-elevated apps from taking focus from it (UIPI). Run LookFocus with --elevated to allow this."
+)
 
 
 def activation_target(hwnd: int) -> int:
@@ -425,6 +429,16 @@ def focus_window(
         return Activation(False, None, reason="window no longer exists")
     if IsHungAppWindow(target):
         return Activation(False, None, reason="window is not responding")
+    fg = GetForegroundWindow()
+    if (
+        fg
+        and not _API.same_window(fg, target)
+        and process_elevated(pid_tid(fg)[0]) is True
+        and not we_are_elevated()
+    ):
+        # Measured (D-030): every stage fails here and costs ~2 s; the Alt tap would be aimed at an
+        # administrator window. Focus *into* an elevated window works, so only this direction is skipped.
+        return Activation(False, None, reason=UIPI_FROM_ELEVATED)
     act = activate(_API, target, allow_alt=allow_alt, first_stage=first_stage, stage_timeout=stage_timeout)
     if act.ok:
         log.info("focused %s via %s (%.0f ms)", window_info(target).label, act.stage, act.total_ms)
@@ -440,10 +454,7 @@ def focus_window(
         fg = GetForegroundWindow()
         fg_pid = pid_tid(fg)[0] if fg else 0
         if fg and process_elevated(fg_pid) is not False and not we_are_elevated():
-            act.reason = (
-                "the current foreground window belongs to an elevated process; Windows blocks non-elevated "
-                "apps from taking focus from it (UIPI). Run LookFocus with --elevated to allow this."
-            )
+            act.reason = UIPI_FROM_ELEVATED
     log.warning("couldn't focus %s: %s", window_info(target).label, act.reason)
     return act
 
