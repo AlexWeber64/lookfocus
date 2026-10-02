@@ -649,3 +649,79 @@ replaces one that hasn't started); input poller; 4 Hz foreground tracker; displa
   the tuning flags. The tray, config file, hotkey and lock/sleep handling wrap the same Daemon in M5.
 - Dry run with the user present (before the fast path): adopted Zone 1 silently at start, then one switch
   decision when the user turned to Zone 2; camera-sharing probe ON.
+
+M4 hardware result (user, `lookfocus run --stats`, zones, face tracked 100%): **CPU 6.1–7.8% of the machine at
+15 fps** (49–63% of one core; inference 16–20 ms). Learned stages: Windows Terminal via attach_thread_input
+in 0–1 ms after the first (full-ladder) switch; Firefox via set_foreground, since `run` is a console process
+(console bias, D-029). The tray app runs console-less, so its learner will see the daemon-faithful picture.
+"Everything worked well."
+
+## M5 — tray, hotkey, autostart, lock/sleep, config, logs
+
+### D-036 Tray app **[scripted end-to-end run: 14/14 checks; real launch verified]**
+`tray.TrayApp`: pystray icon (main thread) around the M4 `Daemon`. States (drawn icons, no assets):
+**active** (green eye), **paused** (grey bars), **no-face** (amber ring; also "camera opening"),
+**calibrating** (blue crosshair), **error** (red "!": not calibrated, one display without zones, layout
+changed). Camera released for another app shows as paused with the reason in the tooltip.
+- Menu: live status line, **Pause/Resume** (also the left-click default), **Calibrate / Recalibrate** (+
+  "Cancel calibration" while it runs), **Choose camera** (Automatic + live MSMF list, stored as device path +
+  name), **Camera sharing…** (the user-requested setup step as a dialog: ON / OFF with "open camera
+  settings?" / not available), **Open config**, **Debug view**, **Start with Windows** (checkmark), **Quit**.
+- pystray's Windows backend shows a menu built at the last `update_menu()`. A small subclass rebuilds it on
+  every right-click so the status line and camera list are current (relies on pystray 0.19.5 internals;
+  the version is pinned).
+- Notifications (tray balloons, can be turned off with `"notifications": false`): camera released for /
+  busy because of another app (D-015/D-023 text), display layout changed, camera resolution changed
+  (D-031), the admin-window limitation (once per run), config problems, calibration results, hotkey
+  pause/resume.
+- The camera-sharing dialog is also offered **once**, automatically, the first time a probe reads OFF on a
+  build that has the setting (remembered in `%APPDATA%\LookFocus\state.json`).
+- Recalibrate from the tray stops the engine (releasing the camera), runs the overlay on its own thread, and
+  brings the overlay to the foreground through the activation ladder so Esc reaches it (there's no terminal
+  for Ctrl+C). Then it restarts the engine on the new calibration.
+- Debug view in the tray shows the **running engine's** frames through the capture debug hook (no second
+  camera client), plus decision state and the faced display. The viewer moved into the package
+  (`lookfocus/debugview.py`); `tools/debug_pose.py` is now a thin wrapper with its own camera.
+- Single instance via a named mutex; a second launch shows "already running".
+
+### D-037 Pause reasons, lock, sleep, display power **[verified: events + scripted pause logic]**
+Pausing is a *set of reasons*, `user`, `lock`, `sleep`, `display`: paused while any is set, so unlocking
+never overrides a manual pause (scripted check: manual resume while locked stays paused until unlock).
+Paused = no switching **and the camera released** (LED off).
+- `sysevents.SystemEvents`: a hidden **top-level** window (WM_POWERBROADCAST doesn't reach message-only
+  windows) on its own thread: `WTSRegisterSessionNotification` lock/unlock; `PBT_APMSUSPEND` /
+  `PBT_APMRESUME*`; and `GUID_CONSOLE_DISPLAY_STATE` via `RegisterPowerSettingNotification`, because Modern
+  Standby laptops like this one may never send classic suspend. Display off → pause, on → resume; this
+  also covers the screen timing out while the user is away. Windows delivers the current display state on
+  registration. Verified: it read **off** while the screen had timed out on battery (idle 256 s > the 180 s
+  DC display timeout), and **on** when the user was back.
+- `WM_DISPLAYCHANGE`: if the engine isn't running (for example because a monitor was missing), try again
+  2 s later. The engine itself re-checks the layout every 5 s (D-035).
+
+### D-038 Config file **[20 tests; live reload verified in the scripted run]**
+`%APPDATA%\LookFocus\config.json`, written with defaults on first run: `dwell_ms`, `typing_dwell_ms`,
+`typing_grace_ms`, `mouse_grace_ms`, `hysteresis`, `none_margin`, `move_cursor_on_switch`,
+`allow_alt_fallback`, `fps`, `camera_backend`, `camera_index` / `camera_name` / `camera_path`,
+`yield_camera_to_other_apps`, `zones`, `pose_source`, `hotkey`, `notifications`, `log_level`.
+- Each field is type- and range-checked; a bad value falls back to its default **individually** and is
+  reported (tray notification + log); unknown keys are reported (typos); unreadable JSON → defaults.
+- Live reload: a watcher checks the file every 2 s. `hotkey`, `log_level` and `notifications` apply in
+  place; anything else restarts the engine (about 1 s). "Choose camera" writes the config the same way.
+- First run seeds `zones` from an existing calibration, and `lookfocus calibrate --zones N` writes `zones`
+  back, so the tray and the calibration agree (otherwise one monitor + zones 0 = "only one display").
+- `lookfocus run` now takes its defaults from the config; command-line flags override.
+
+### D-039 Hotkey, autostart, logs, elevation **[verified]**
+- Pause hotkey via `RegisterHotKey` with `MOD_NOREPEAT` on the events window (no hook). Default
+  `ctrl+alt+shift+g`; parsed from the config (modifiers + letter/digit/F1–F24/named key; at least one
+  modifier required). If another app already owns it (error 1409), a notification says so.
+- Start with Windows: `HKCU\...\Run\LookFocus = "<venv>\Scripts\pythonw.exe" -m lookfocus tray` (no console;
+  the frozen build will use its exe). Plain `lookfocus` also starts the tray. Verified: a real `pythonw`
+  launch created the config, registered the hotkey, started the engine on the NV12 fast path, ran the
+  sharing probe.
+- Logs: `%APPDATA%\LookFocus\logs\lookfocus.log`, rotating 1 MB × 3. Text only: never images, never
+  keystrokes. Window titles appear truncated to 40 characters (e.g. "focused 'Inbox - …' via …"); local
+  only, but noted in the README.
+- `lookfocus tray --elevated` relaunches as administrator (UAC prompt) so it can take focus *from*
+  administrator windows (D-030). The Run key can't elevate silently, so autostart is always non-elevated,
+  as documented. No UIAccess.

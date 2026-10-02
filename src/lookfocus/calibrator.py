@@ -50,16 +50,26 @@ class Calibrator:
         overlay: O.Overlay,
         settings: CalibratorSettings,
         say: Callable[[str], None] = print,
+        *,
+        cancel_hint: str = "Ctrl+C in the terminal (or Esc here) cancels.",
+        focus: Callable[[int], object] | None = None,
     ) -> None:
         self.slot, self.ov, self.s, self.say = slot, overlay, settings, say
+        self.cancel_hint = cancel_hint
+        self.focus = focus  # brings the overlay to the foreground so Esc reaches it (tray: no terminal)
         self.frames: dict[tuple[int, int], int] = {}  # native camera frame sizes seen while collecting
+
+    def _show(self, rect) -> None:
+        self.ov.show(rect)
+        if self.focus is not None:
+            self.focus(self.ov.hwnd)
 
     def _pump(self, seconds: float) -> None:
         if not self.ov.pump(seconds):
             raise Cancelled()
 
     def wait_for_face(self, first: LogicalDisplay) -> None:
-        self.ov.show(first.rect)
+        self._show(first.rect)
         t_end = time.monotonic() + self.s.face_timeout_s
         while time.monotonic() < t_end:
             _, sample = self.slot.get()
@@ -72,7 +82,7 @@ class Calibrator:
                 lines=[
                     "Sit as you normally do and face this screen.",
                     detail,
-                    "Ctrl+C in the terminal (or Esc here) cancels.",
+                    self.cancel_hint,
                 ],
             )
             self._pump(0.2)
@@ -130,12 +140,12 @@ class Calibrator:
         self.wait_for_face(displays[0])
         out = []
         for d in displays:
-            self.ov.show(d.rect)
+            self._show(d.rect)
             self.ov.set_scene(
                 title=f"Calibrating {d.short}",
                 lines=[
                     "Look at each dot as it appears. Move your head naturally.",
-                    "Ctrl+C in the terminal (or Esc here) cancels.",
+                    self.cancel_hint,
                 ],
             )
             self._pump(1.5)

@@ -489,6 +489,7 @@ class CaptureThread(threading.Thread):
     # --- control (any thread) ---
     def stop(self, timeout: float = 5.0) -> None:
         self._stop_evt.set()
+        self._gen += 1  # a sharing probe still running belongs to a stopped capture: drop its result
         self._wake.set()
         self.join(timeout)
 

@@ -3,7 +3,7 @@
 Look at a monitor and just type: LookFocus uses your webcam to work out which monitor you are facing and moves
 keyboard focus to the window you last used on that monitor. Windows 11, runs from the tray, fully offline.
 
-> Status: **M4 (engine) done, awaiting hardware check.** Run it with `lookfocus run`. Not usable yet. Full setup, tuning
+> Status: **M5 (tray app) done, awaiting hardware check.** Not usable yet. Full setup, tuning
 > and limitations docs land in M6.
 
 ## Privacy
@@ -20,3 +20,14 @@ py -3.12 -m venv .venv
 .venv\Scripts\python.exe -m pip install --no-deps -e .
 .venv\Scripts\python.exe tools\cam_probe.py
 ```
+
+## Running (until the full guide in M6)
+```powershell
+.venv\Scripts\lookfocus.exe calibrate --zones 2      # once (zones only if you have a single monitor)
+.venv\Scripts\pythonw.exe -m lookfocus               # the tray app (no console window)
+```
+Right-click the tray icon for Pause/Resume, Recalibrate, Choose camera, Camera sharing, Open config,
+Debug view, Start with Windows and Quit. **Ctrl+Alt+Shift+G** pauses and resumes. LookFocus pauses (and
+releases the camera) while the PC is locked, asleep or the screen is off. Settings live in
+`%APPDATA%\LookFocus\config.json` (changes apply within a few seconds); logs in
+`%APPDATA%\LookFocus\logs\` (text only; window titles appear truncated).

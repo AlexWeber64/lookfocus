@@ -87,6 +87,7 @@ def cmd_calibrate(args) -> int:
     path = Path(args.calibration)
     C.save(cal, path)
     print(f"\nSaved {path}")
+    _sync_config_zones(args.zones)
     src = args.pose_source
     print(f"{'display':<12}{'center h':>10}{'center v':>10}{'width':>9}{'height':>9}{'noise h/v':>13}")
     for d in cal.displays:
@@ -111,6 +112,19 @@ def cmd_calibrate(args) -> int:
     else:
         print("All displays are distinguishable. Try `lookfocus watch` next.")
     return 0
+
+
+def _sync_config_zones(zones: int) -> None:
+    """Keep config.json's "zones" in line with the calibration just made (the tray app reads the config)."""
+    from dataclasses import replace
+
+    from lookfocus import config as K
+
+    cfg_path = paths.data_dir() / "config.json"
+    cfg, _ = K.load(cfg_path)
+    if cfg.zones != zones or not cfg_path.exists():
+        K.save(replace(cfg, zones=zones), cfg_path)
+        print(f'Set "zones": {zones} in {cfg_path}')
 
 
 def cmd_watch(args) -> int:
@@ -193,10 +207,11 @@ def cmd_camera_sharing(args) -> int:
 def cmd_run(args) -> int:
     """The full engine in a console (the tray app wraps the same Daemon in M5)."""
     import time
+    from dataclasses import replace
 
+    from lookfocus import config as K
     from lookfocus import windows_focus as wf
-    from lookfocus.daemon import Daemon, DaemonSettings
-    from lookfocus.decision import DecisionSettings
+    from lookfocus.daemon import Daemon, settings_from_config
 
     if args.elevated and not wf.we_are_elevated():
         argv = [a for a in sys.argv[1:] if a != "--elevated"]
@@ -215,22 +230,27 @@ def cmd_run(args) -> int:
     if missing or added:
         print("The display layout changed since calibration; run `lookfocus calibrate` again.")
         return 1
-    settings = DaemonSettings(
-        zones=zones,
-        pose_source=args.pose_source,
-        none_margin=args.none_margin,
-        decision=DecisionSettings(
-            dwell_s=args.dwell_ms / 1000,
-            typing_dwell_s=args.typing_dwell_ms / 1000,
-            typing_grace_s=args.typing_grace_ms / 1000,
-            mouse_grace_s=args.mouse_grace_ms / 1000,
-            hysteresis=args.hysteresis,
-        ),
-        capture=_capture_settings(args, fps=args.fps),
-        move_cursor_on_switch=args.move_cursor,
-        allow_alt=not args.no_alt,
-        dry_run=args.dry_run,
-    )
+    cfg, problems = K.load(paths.data_dir() / "config.json")  # flags given on the command line win
+    for problem in problems:
+        print(f"config: {problem}")
+    flags = {
+        "fps": args.fps,
+        "dwell_ms": args.dwell_ms,
+        "typing_dwell_ms": args.typing_dwell_ms,
+        "typing_grace_ms": args.typing_grace_ms,
+        "mouse_grace_ms": args.mouse_grace_ms,
+        "hysteresis": args.hysteresis,
+        "none_margin": args.none_margin,
+        "pose_source": args.pose_source,
+        "camera_backend": args.backend,
+        "zones": zones,
+    }
+    cfg = replace(cfg, **{k: v for k, v in flags.items() if v is not None})
+    if args.move_cursor:
+        cfg = replace(cfg, move_cursor_on_switch=True)
+    if args.no_alt:
+        cfg = replace(cfg, allow_alt_fallback=False)
+    settings = settings_from_config(cfg, dry_run=args.dry_run)
 
     def stamp() -> str:
         return dt.datetime.now().strftime("%H:%M:%S.%f")[:-3]
@@ -299,18 +319,18 @@ def _print_stats(d, stamp, every: float = 10.0) -> None:
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="lookfocus", description="Move keyboard focus to the display you face.")
     ap.add_argument("-v", "--verbose-log", action="store_true", help="debug logging")
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub = ap.add_subparsers(dest="cmd")
 
-    def common(p, zones_default):
+    def common(p, zones_default, from_config=False):
         p.add_argument(
             "--zones",
             type=int,
             default=zones_default,
             help="split the primary monitor into N side-by-side logical displays",
         )
-        p.add_argument("--backend", choices=["msmf", "dshow"], default="msmf")
+        p.add_argument("--backend", choices=["msmf", "dshow"], default=None if from_config else "msmf")
         p.add_argument("--no-fallback", action="store_true", help="don't try the other camera backend")
-        p.add_argument("--pose-source", choices=POSE_SOURCES, default="matrix")
+        p.add_argument("--pose-source", choices=POSE_SOURCES, default=None if from_config else "matrix")
         p.add_argument("--calibration", default=str(paths.data_dir() / "calibration.json"))
 
     p = sub.add_parser("calibrate", help="calibrate head pose for each display")
@@ -329,25 +349,32 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_camera_sharing)
 
     p = sub.add_parser("run", help="run LookFocus in this console (switches focus)")
-    common(p, None)
+    common(p, None, from_config=True)
     p.add_argument("--dry-run", action="store_true", help="decide and report, but never move focus")
     p.add_argument("--stats", action="store_true", help="print CPU / fps / inference time every 10 s")
-    p.add_argument("--fps", type=float, default=15.0)
-    p.add_argument("--dwell-ms", type=float, default=300)
-    p.add_argument("--typing-dwell-ms", type=float, default=1000)
-    p.add_argument("--typing-grace-ms", type=float, default=2000)
-    p.add_argument("--mouse-grace-ms", type=float, default=1500)
-    p.add_argument("--hysteresis", type=float, default=2.0, help="extra turn needed to leave a display")
-    p.add_argument("--none-margin", type=float, default=6.0, help="how far outside all displays is none")
+    p.add_argument("--fps", type=float, default=None, help="default: config (15)")
+    p.add_argument("--dwell-ms", type=int, default=None, help="default: config (300)")
+    p.add_argument("--typing-dwell-ms", type=int, default=None, help="default: config (1000)")
+    p.add_argument("--typing-grace-ms", type=int, default=None, help="default: config (2000)")
+    p.add_argument("--mouse-grace-ms", type=int, default=None, help="default: config (1500)")
+    p.add_argument("--hysteresis", type=float, default=None, help="extra turn needed to leave a display")
+    p.add_argument("--none-margin", type=float, default=None, help="how far outside all displays is none")
     p.add_argument("--move-cursor", action="store_true", help="also move the pointer to the new display")
     p.add_argument("--no-alt", action="store_true", help="never use the Alt-tap activation fallback")
     p.add_argument("--elevated", action="store_true", help="relaunch as administrator (UAC prompt)")
     p.set_defaults(func=cmd_run)
+
+    p = sub.add_parser("tray", help="the tray app (also what plain `lookfocus` and autostart run)")
+    p.add_argument("--elevated", action="store_true", help="run as administrator (UAC prompt)")
     return ap
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.cmd in (None, "tray"):  # no command = the tray app (what autostart runs)
+        from lookfocus import tray
+
+        return tray.main(elevated=getattr(args, "elevated", False))
     logging.basicConfig(
         level=logging.DEBUG if args.verbose_log else logging.WARNING,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",

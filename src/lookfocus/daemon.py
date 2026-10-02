@@ -47,6 +47,41 @@ class DaemonSettings:
     layout_check_s: float = 5.0
 
 
+def capture_settings(cfg, **overrides) -> CaptureSettings:
+    """CaptureSettings from a config.Config."""
+    from lookfocus.camera_enum import CameraChoice
+
+    kw = dict(
+        backend=cfg.camera_backend,
+        camera=CameraChoice(path=cfg.camera_path, name=cfg.camera_name, index=cfg.camera_index),
+        fps=cfg.fps,
+        yield_to_other_apps=cfg.yield_camera_to_other_apps,
+    )
+    kw.update(overrides)
+    return CaptureSettings(**kw)
+
+
+def settings_from_config(cfg, **overrides) -> DaemonSettings:
+    """DaemonSettings from a config.Config (the tray app and `lookfocus run` share this)."""
+    kw = dict(
+        zones=cfg.zones,
+        pose_source=cfg.pose_source,
+        none_margin=cfg.none_margin,
+        decision=DecisionSettings(
+            dwell_s=cfg.dwell_ms / 1000,
+            typing_dwell_s=cfg.typing_dwell_ms / 1000,
+            typing_grace_s=cfg.typing_grace_ms / 1000,
+            mouse_grace_s=cfg.mouse_grace_ms / 1000,
+            hysteresis=cfg.hysteresis,
+        ),
+        capture=capture_settings(cfg),
+        move_cursor_on_switch=cfg.move_cursor_on_switch,
+        allow_alt=cfg.allow_alt_fallback,
+    )
+    kw.update(overrides)
+    return DaemonSettings(**kw)
+
+
 StatusCallback = Callable[[str, str], None]  # (status, detail)
 EventCallback = Callable[[str, dict], None]  # (kind, info)
 
