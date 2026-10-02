@@ -517,3 +517,32 @@ of the run was still in flight and the state was UNKNOWN, which was treated as O
   Reports are also written to `%APPDATA%\LookFocus\focus_test_last.txt` (text only).
 - Noted for M4: the user runs "Move Mouse" (a keep-awake jiggler). Synthetic pointer moves look like
   mouse activity to `GetCursorPos`/`GetLastInputInfo` and could hold off switching, or abort focus_test.
+
+### D-029 focus_test findings from the user's runs, and test-harness fixes **[verified]**
+User runs (24 switches each, zone mode): Windows Terminal ↔ Firefox 23/23; Terminal ↔ Explorer with
+minimize every 4th 23/23 (restore 6/6); admin PowerShell ↔ Explorer 23/23 twice. Keyboard input went to
+every target except the admin console (see below). No failure in 115 switches. But four test-harness
+problems meant part of the matrix wasn't what it claimed:
+1. **Query matching:** `--windows Code explorer` picked the *terminal running the test* for "Code", because a
+   console's title holds the command line, which contains every query. Matching is now ranked: exact program
+   name, exact class, then name / title / class substrings, with any window whose title contains
+   `focus_test` ranked last. Checked: Code→VS Code, Settings→Settings, Administrator→admin PowerShell.
+2. **The "elevated" runs were elevated both ways:** they were started from the admin PowerShell, so the test
+   itself ran elevated (`this process elevated: True`). That verified **elevated LookFocus → elevated and
+   normal windows: 23/23 via attach_thread_input** (what `--elevated` is for). Non-elevated LookFocus →
+   elevated window is still **[unverified]**.
+3. **Keyboard-focus check:** reported NO for every switch to the admin PowerShell (classic
+   `ConsoleWindowClass`). Reproduced with a non-elevated `conhost` window: `GetGUIThreadInfo(window's thread)`
+   returns no focus window for consoles even when they have it, while the *foreground* thread (tid 0)
+   correctly reports the console as active and focused. `keyboard_focus_in` now asks about the foreground
+   thread. Explorer: both methods agree.
+4. **Console bias:** plain `SetForegroundWindow` worked on every switch *away from* the test's own terminal
+   (to Firefox 12/12, to Explorer 6/6) and failed on every switch *back to* it. Windows grants foreground
+   rights to a process attached to the foreground console. The real app has no console, so focus_test
+   now runs the switching in a console-less `pythonw` child by default and streams its log (`--console`
+   keeps the old mode; `--elevated` starts the child via `ShellExecuteExW("runas")` and waits on its
+   handle). Console-less smoke test (Explorer ↔ Explorer): SetForegroundWindow worked only on the first
+   switch, then attach_thread_input 5/5 at 0 ms, the same picture as D-028. So for the daemon, attach is
+   the stage that matters.
+- The user's `ForegroundLockTimeout` now reads 2147483647 ms (the lock never expires). It was 200000 earlier;
+  some other software changed it. It doesn't change the picture above.

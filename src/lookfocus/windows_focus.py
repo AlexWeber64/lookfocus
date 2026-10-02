@@ -449,13 +449,15 @@ def focus_window(
 
 
 def keyboard_focus_in(hwnd: int) -> bool:
-    """Does the target's GUI thread have keyboard focus on one of its windows?"""
-    _, tid = pid_tid(hwnd)
+    """Is keyboard input going to this window now? Asks about the *foreground* thread (tid 0): for classic
+    console windows (ConsoleWindowClass) the window's own thread reports no focus even when it has it
+    (measured, D-029)."""
     gti = GUITHREADINFO()
     gti.cbSize = ctypes.sizeof(gti)
-    if not GetGUIThreadInfo(tid, ctypes.byref(gti)) or not gti.hwndFocus:
+    if not GetGUIThreadInfo(0, ctypes.byref(gti)):
         return False
-    return root_owner(gti.hwndFocus) == root_owner(hwnd) or gti.hwndActive == root_owner(hwnd)
+    root = root_owner(hwnd)
+    return any(h and root_owner(h) == root for h in (gti.hwndFocus, gti.hwndActive))
 
 
 def move_cursor_into(rect: Rect) -> None:
@@ -489,6 +491,48 @@ def relaunch_elevated(argv: list[str]) -> bool:
     params = subprocess.list2cmdline(argv)
     rc = ShellExecuteW(None, "runas", sys.executable, params, os.getcwd(), 1)
     return int(rc or 0) > 32
+
+
+class SHELLEXECUTEINFOW(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", DWORD),
+        ("fMask", ctypes.c_ulong),
+        ("hwnd", HWND),
+        ("lpVerb", wintypes.LPCWSTR),
+        ("lpFile", wintypes.LPCWSTR),
+        ("lpParameters", wintypes.LPCWSTR),
+        ("lpDirectory", wintypes.LPCWSTR),
+        ("nShow", ctypes.c_int),
+        ("hInstApp", wintypes.HINSTANCE),
+        ("lpIDList", ctypes.c_void_p),
+        ("lpClass", wintypes.LPCWSTR),
+        ("hkeyClass", wintypes.HKEY),
+        ("dwHotKey", DWORD),
+        ("hIconOrMonitor", wintypes.HANDLE),
+        ("hProcess", wintypes.HANDLE),
+    ]
+
+
+ShellExecuteExW = _sig(shell32, "ShellExecuteExW", BOOL, ctypes.POINTER(SHELLEXECUTEINFOW))
+WaitForSingleObject = _sig(kernel32, "WaitForSingleObject", DWORD, wintypes.HANDLE, DWORD)
+SEE_MASK_NOCLOSEPROCESS = 0x00000040
+
+
+def start_elevated(exe: str, argv: list[str], show: int = 0) -> int | None:
+    """Run exe as administrator (UAC prompt); returns a process handle to wait on, or None if refused."""
+    sei = SHELLEXECUTEINFOW()
+    sei.cbSize = ctypes.sizeof(sei)
+    sei.fMask = SEE_MASK_NOCLOSEPROCESS
+    sei.lpVerb, sei.lpFile = "runas", exe
+    sei.lpParameters, sei.lpDirectory = subprocess.list2cmdline(argv), os.getcwd()
+    sei.nShow = show
+    if not ShellExecuteExW(ctypes.byref(sei)) or not sei.hProcess:
+        return None
+    return sei.hProcess
+
+
+def process_running(handle: int) -> bool:
+    return WaitForSingleObject(handle, 0) == 0x102  # WAIT_TIMEOUT
 
 
 # ------------------------------------------------------------------------------------------------
