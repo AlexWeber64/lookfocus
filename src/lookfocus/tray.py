@@ -120,13 +120,20 @@ def message_box(text: str, flags: int = MB_OK | MB_ICONINFO) -> int:
     return user32.MessageBoxW(None, text, "LookFocus", flags | MB_SETFOREGROUND | MB_TOPMOST)
 
 
+# pystray's Windows backend isn't thread-safe: replacing the icon checks the old HICON and then destroys it,
+# so two threads updating at once destroyed the same handle twice ("WinError 1402: Invalid cursor handle",
+# seen in the user's log on resume, where the hotkey and the engine both update the icon) and the second
+# caller's handler aborted. Every change to the tray icon, title, menu or balloons goes through this lock.
+ICON_LOCK = threading.RLock()
+
+
 class _TrayIcon(pystray.Icon):
     """pystray's Windows backend shows a menu built at the last update_menu(); rebuild it on every
     right-click so the status line and the camera list are current (relies on pystray 0.19.5 internals)."""
 
     def _on_notify(self, wparam, lparam):
         if lparam == 0x0205:  # WM_RBUTTONUP
-            with contextlib.suppress(Exception):
+            with ICON_LOCK, contextlib.suppress(Exception):
                 self._update_menu()
         return super()._on_notify(wparam, lparam)
 
@@ -268,10 +275,21 @@ class TrayApp:
 
     # --- state, icon, notifications ------------------------------------------------------------
     def _set_state(self, state: str, detail: str = "") -> None:
-        self.state, self.detail = state, detail
-        self.icon.icon = self._icons.get(state, self._icons["error"])
-        self.icon.title = f"LookFocus: {detail or state}"[:127]
-        with contextlib.suppress(Exception):
+        with ICON_LOCK:
+            changed = state != self.state
+            self.state, self.detail = state, detail
+            title = f"LookFocus: {detail or state}"[:127]
+            try:
+                if changed:  # same picture for "facing Zone 1" and "facing Zone 2": don't reload it
+                    self.icon.icon = self._icons.get(state, self._icons["error"])
+                if title != self.icon.title:
+                    self.icon.title = title
+            except Exception:  # a tray glitch must never abort the caller (hotkey, engine status)
+                log.exception("tray icon update failed")
+            self._refresh_menu()
+
+    def _refresh_menu(self) -> None:
+        with ICON_LOCK, contextlib.suppress(Exception):
             self.icon.update_menu()
 
     def _show_paused(self) -> None:
@@ -282,7 +300,7 @@ class TrayApp:
     def notify(self, title: str, body: str) -> None:
         log.info("notify: %s: %s", title, body)
         if self.cfg.notifications:
-            with contextlib.suppress(Exception):
+            with ICON_LOCK, contextlib.suppress(Exception):
                 self.icon.notify(body[:255], title[:63])
 
     def _status_text(self) -> str:
@@ -472,8 +490,7 @@ class TrayApp:
             autostart.set_enabled(not autostart.is_enabled())
         except OSError as e:
             self.notify("Start with Windows", f"Couldn't change the setting: {e}")
-        with contextlib.suppress(Exception):
-            self.icon.update_menu()
+        self._refresh_menu()
 
     # --- config file ---------------------------------------------------------------------------
     def _mtime(self) -> float:
@@ -673,8 +690,7 @@ class TrayApp:
                 target=self._view, args=(self.daemon,), name="debug-view", daemon=True
             )
             self._viewer.start()
-        with contextlib.suppress(Exception):
-            self.icon.update_menu()
+        self._refresh_menu()
 
     def _close_viewer(self) -> None:
         v = self._viewer
@@ -713,8 +729,7 @@ class TrayApp:
         finally:
             d.capture.debug_hook = None
             self._viewer = None
-            with contextlib.suppress(Exception):
-                self.icon.update_menu()
+            self._refresh_menu()
 
 
 def main(elevated: bool = False) -> int:

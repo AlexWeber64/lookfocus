@@ -841,3 +841,17 @@ The README is the user guide:
   DirectShow-only cameras, Windows 10, and exclusive full-screen apps.
 
 Version set to 1.0.0.
+
+## Post-M6 fixes
+
+### D-045 Tray icon updates are serialized **[2 tests; found in the user's log]**
+The user's log showed `OSError: [WinError 1402] Invalid cursor handle` from `self.icon.icon = ...`, always at
+the same millisecond as a resume. The hotkey thread (`_set_reason` → "resuming") and the engine's decision
+thread (status "opening camera") updated the tray icon at once. pystray 0.19.5's `_release_icon` checks the
+old HICON and then destroys it without a lock, so both threads destroyed the same handle, and the second
+one's handler aborted: once, the "LookFocus resumed" notification was never shown. All icon, tooltip, menu
+and balloon changes now go through one `ICON_LOCK`, failures are logged instead of propagating, and the
+icon image is only replaced when the *state* changes. "facing Zone 1/2" → "facing Zone 2/2" used to reload
+the same picture, a temp .ico write plus DestroyIcon/LoadImage, on every switch. Tests: two threads
+flipping states never overlap inside the icon setter (fails without the lock), and a detail-only change
+reloads nothing.

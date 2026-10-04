@@ -1,6 +1,7 @@
 import logging
 import sys
 import threading
+import time
 from collections import deque
 from pathlib import Path
 
@@ -78,6 +79,66 @@ def test_watchdog_restarts_then_gives_up():
         app._check_engine()
     assert calls.count("start") == RESTART_BUDGET
     assert calls[-2:] == [("state", "error"), ("notify", "LookFocus stopped")]
+
+
+class _FakeIcon:
+    """Records icon reloads and fails if two threads are inside an update at once (pystray isn't safe)."""
+
+    def __init__(self):
+        self.title, self.loads, self.overlaps, self._busy = "", 0, 0, False
+        self._icon = None
+
+    @property
+    def icon(self):
+        return self._icon
+
+    @icon.setter
+    def icon(self, value):
+        if self._busy:
+            self.overlaps += 1
+        self._busy = True
+        time.sleep(0.002)  # widen the window pystray's check-then-DestroyIcon race needs
+        self._icon, self.loads = value, self.loads + 1
+        self._busy = False
+
+    def update_menu(self):
+        pass
+
+
+def _icon_app():
+    from lookfocus.tray import TrayApp, make_icon
+
+    app = object.__new__(TrayApp)
+    app.icon = _FakeIcon()
+    app.state, app.detail = "no_face", ""
+    app._icons = {s: make_icon(s) for s in ("active", "paused", "no_face", "error")}
+    return app
+
+
+def test_icon_updates_from_several_threads_never_overlap():
+    app = _icon_app()
+
+    def flip(states):
+        for _ in range(20):
+            for s in states:
+                app._set_state(s, s)
+
+    threads = [
+        threading.Thread(target=flip, args=(order,))
+        for order in (["active", "paused"], ["paused", "no_face"])
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert app.icon.overlaps == 0 and app.icon.loads > 0
+
+
+def test_icon_image_reloads_only_when_the_state_changes():
+    app = _icon_app()
+    app._set_state("active", "facing Zone 1/2")
+    app._set_state("active", "facing Zone 2/2")  # same picture: only the tooltip changes
+    assert app.icon.loads == 1 and app.icon.title == "LookFocus: facing Zone 2/2"
 
 
 def test_uncaught_thread_exception_is_logged(monkeypatch, caplog):
