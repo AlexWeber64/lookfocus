@@ -60,6 +60,9 @@ py -3.12 -m venv .venv
   windows_focus, daemon (engine threads), sysevents, autostart, debugview, tray. CLI: main (`python -m lookfocus`).
 - `tools/` — dev/debug scripts (cam_probe, cam_share_test, net_audit, debug_pose, focus_test, build_exe)
 - `packaging/` — PyInstaller spec + shared entry point (dispatches `--probe-child` in the frozen exe)
+- `README.md` is the friendly landing page (plain language, no internals); details go in `docs/GUIDE.md`.
+  `docs/media/` holds the README video/GIF and tray-icon PNGs (exported from `tray.make_icon`).
+  `brag-output/` (gitignored) is the `/brag` Hyperframes project that renders the video.
 - `tests/` — pytest; hardware-free except for Windows-only checks that skip elsewhere
 - `models/face_landmarker.task` — committed, sha256-checked (see `models/SOURCE.md`)
 - User data: `%APPDATA%\LookFocus\` (config.json, calibration.json, logs)

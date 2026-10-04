@@ -855,3 +855,36 @@ icon image is only replaced when the *state* changes. "facing Zone 1/2" → "fac
 the same picture, a temp .ico write plus DestroyIcon/LoadImage, on every switch. Tests: two threads
 flipping states never overlap inside the icon setter (fails without the lock), and a detail-only change
 reloads nothing.
+
+### D-046 README becomes a landing page; details move to docs/GUIDE.md; demo video **[user request]**
+The user found the README too technical and pointed at the Glance Switch site as a model. The README now
+follows the *shape* of a product page, with all copy original and no Glance Switch branding or wording (the
+spec forbids copying):
+- hero line and a demo GIF (linked to the full video);
+- the problem as a without/with table;
+- a three-step "how it works";
+- feature groups in plain language;
+- get started, the tray icons as images, getting good results, a short tuning table and an FAQ;
+- a short "good to know" list that still names the untested multi-monitor cases.
+
+Everything technical moved to `docs/GUIDE.md`:
+- install details, the calibration procedure, when it switches, the full settings reference and symptom table;
+- camera sharing, admin windows, troubleshooting, how privacy is enforced, resource use;
+- the full known limitations, the standalone build, uninstall and development.
+
+The spec's M6 README topics are therefore split between the two files.
+- **Demo video** via the `/brag` skill (Hyperframes 0.8.123):
+  - 21.5 s, 1920x1080, five scenes: the hook; focus following a drawn head between two monitors (the jump
+    beat-locked to the music); "Calm by design" cards; the calibration overlay recreated in the app's own
+    colours and copy; privacy and the real tray icon.
+  - No real camera images or faces.
+  - `docs/media/lookfocus-demo.mp4` (4.3 MB, poster baked into frame 0) and `lookfocus-demo.gif` (1.3 MB,
+    800 px, the 8 s demo loop that the README shows inline). A repo-relative mp4 doesn't play inline on
+    GitHub, so the GIF links to it.
+  - The Hyperframes project is in `brag-output/`, gitignored because it holds a copy of the music track.
+  - Music: "Happy Beats / Business Moves vol. 9" by ende.app, bundled with /brag. Its license isn't
+    documented in the skill ("verify before redistributing"), so check it before publishing the video, or
+    re-render with `--no-music`.
+- **`make_icon` now scales its glyphs** (designed on a 64 px grid). They used to be fixed pixel sizes, so the
+  256 px standalone-exe icon and the video's exported icons had a tiny eye in a big disc. A test checks that the
+  glyph's share of the icon is the same at 64 and 256 px. `docs/media/icon-*.png` are exported from it.

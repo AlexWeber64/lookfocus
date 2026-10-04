@@ -54,28 +54,36 @@ RESTART_BUDGET, RESTART_WINDOW_S = 3, 600.0
 
 
 def make_icon(state: str, size: int = 64) -> Image.Image:
-    """Coloured disc with a white glyph per state (drawn, no image assets)."""
+    """Coloured disc with a white glyph per state (drawn, no image assets). Designed on a 64 px grid and
+    scaled, so the 256 px exe icon has the same proportions as the tray icon."""
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     s = size
-    d.ellipse((2, 2, s - 3, s - 3), fill=STATE_COLORS.get(state, STATE_COLORS["error"]))
+    k, c = size / 64, size / 2
+
+    def box(x0, y0, x1, y1):
+        return (c + x0 * k, c + y0 * k, c + x1 * k, c + y1 * k)
+
+    def px(n: float) -> int:
+        return max(1, round(n * k))
+
+    d.ellipse((2 * k, 2 * k, s - 3 * k, s - 3 * k), fill=STATE_COLORS.get(state, STATE_COLORS["error"]))
     w = (255, 255, 255, 255)
-    c = s / 2
     if state == "active":  # an eye: ring + pupil
-        d.ellipse((c - 18, c - 12, c + 18, c + 12), outline=w, width=4)
-        d.ellipse((c - 6, c - 6, c + 6, c + 6), fill=w)
+        d.ellipse(box(-18, -12, 18, 12), outline=w, width=px(4))
+        d.ellipse(box(-6, -6, 6, 6), fill=w)
     elif state == "paused":
-        d.rectangle((c - 12, c - 14, c - 4, c + 14), fill=w)
-        d.rectangle((c + 4, c - 14, c + 12, c + 14), fill=w)
+        d.rectangle(box(-12, -14, -4, 14), fill=w)
+        d.rectangle(box(4, -14, 12, 14), fill=w)
     elif state == "no_face":
-        d.ellipse((c - 13, c - 13, c + 13, c + 13), outline=w, width=4)
+        d.ellipse(box(-13, -13, 13, 13), outline=w, width=px(4))
     elif state == "calibrating":
-        d.ellipse((c - 14, c - 14, c + 14, c + 14), outline=w, width=3)
-        d.line((c - 20, c, c + 20, c), fill=w, width=3)
-        d.line((c, c - 20, c, c + 20), fill=w, width=3)
+        d.ellipse(box(-14, -14, 14, 14), outline=w, width=px(3))
+        d.line(box(-20, 0, 20, 0), fill=w, width=px(3))
+        d.line(box(0, -20, 0, 20), fill=w, width=px(3))
     else:  # error: "!"
-        d.rectangle((c - 4, c - 18, c + 4, c + 6), fill=w)
-        d.ellipse((c - 5, c + 10, c + 5, c + 20), fill=w)
+        d.rectangle(box(-4, -18, 4, 6), fill=w)
+        d.ellipse(box(-5, 10, 5, 20), fill=w)
     return img
 
 

@@ -1,329 +1,196 @@
-# LookFocus
+<h1 align="center">
+  <img src="docs/media/icon-active.png" width="48" alt=""><br>
+  LookFocus
+</h1>
 
-Look at a monitor and just type. LookFocus watches your head pose through the webcam, works out which monitor
-you're facing, and moves keyboard focus to the window you last used on that monitor. It runs in the tray on
-Windows 11 and works fully offline.
+<p align="center"><b>Look at a monitor and just type.</b></p>
 
-It follows your **head**, not your eyes: turn your head toward a screen the way you normally do and keep it
-there for a moment, and the window there gets focus. A quick glance does nothing.
+<p align="center">
+LookFocus notices which screen you're facing and puts your keyboard there. No reaching for the mouse,
+no clicking a window first. It runs quietly in the Windows tray and never goes online.
+</p>
 
-> Status: v1 complete (milestones M0–M6). Tested on one machine: a ThinkPad X9 15 with its built-in camera
-> and one physical monitor split into zones. Real multi-monitor setups haven't been tested yet; see
-> [Known limitations](#known-limitations). `DECISIONS.md` records every design choice and measurement.
+<p align="center">
+  <a href="docs/media/lookfocus-demo.mp4">
+    <img src="docs/media/lookfocus-demo.gif" width="800" alt="Two monitors: the user turns their head from the left screen to the right one and keyboard focus follows">
+  </a>
+  <br>
+  <sub><a href="docs/media/lookfocus-demo.mp4">▶ Watch the 21-second video (with sound)</a></sub>
+</p>
 
-## Contents
-- [Privacy](#privacy)
-- [Requirements](#requirements)
-- [Install](#install)
-- [First run: calibrate](#first-run-calibrate)
-- [Everyday use](#everyday-use)
-- [Camera placement and lighting](#camera-placement-and-lighting)
-- [Tuning guide](#tuning-guide)
-- [Video calls and camera sharing](#video-calls-and-camera-sharing)
-- [Administrator windows](#administrator-windows)
-- [Troubleshooting](#troubleshooting)
-- [Known limitations](#known-limitations)
-- [Optional: standalone build](#optional-standalone-build)
-- [Uninstall](#uninstall)
-- [Development](#development)
+---
 
-## Privacy
-- **Camera images stay in memory.** They're never saved, logged or sent anywhere. Each frame is reduced to
-  three head angles and then dropped.
-- **No network.** LookFocus never connects to anything at runtime. mediapipe is pinned to 0.10.33, because
-  later releases include a usage-telemetry uploader (`DECISIONS.md` D-003). Two checks guard this. At
-  startup the app refuses to run if the mediapipe library links any network API or the face model's
-  SHA-256 is wrong. `tools/net_audit.py` watches for real connections.
-- **No keylogging.** LookFocus installs no keyboard or mouse hooks and never reads which keys you press. "You
-  are typing" is inferred from "some input happened that wasn't the mouse" (`GetLastInputInfo` plus pointer
-  position and mouse-button state).
-- **Logs** (`%APPDATA%\LookFocus\logs`) are text only: state changes, which display you faced, and the
-  window that got focus, with titles cut to 40 characters. They stay on your PC; delete them any time.
+## The problem
 
-## Requirements
-- Windows 11, x64. Windows 10 may work but hasn't been tested.
-- A colour webcam: built-in or USB, roughly in front of you. A Windows Hello IR camera is detected and
-  skipped automatically.
-- Two or more monitors, or one monitor split into zones (see below).
-- From source: Python 3.12 (x64) from python.org, and about 700 MB of disk for the virtual environment.
-  Alternatively, use the standalone build (no Python needed).
+With two screens, typing on the "other" one always costs an extra move:
 
-## Install
-From a PowerShell window in the project folder:
+| Without LookFocus | With LookFocus |
+|---|---|
+| Look at the other screen | Look at the other screen |
+| Find the mouse, move it across | |
+| Click the window, hope it was the right spot | |
+| Type | Type |
+
+Your eyes already made the decision. LookFocus just acts on it.
+
+## How it works
+
+1. **Show it your screens, once.** A dot appears on each screen, you look at it, done. It takes about a
+   minute.
+2. **Turn your head.** Your webcam sees which way your head points. Hold it there for a moment (about a third of
+   a second) and LookFocus knows which screen you mean.
+3. **Type.** The window you last used on that screen already has the keyboard.
+
+That's the whole thing. It follows your **head**, not your eyes, so quick glances don't count.
+
+## What makes it pleasant to live with
+
+**It remembers every screen.** Each screen keeps its own "last window": your editor on the left, your notes on
+the right. Turning back brings you back to exactly where you were typing.
+
+**It isn't twitchy.**
+- A quick glance doesn't switch anything. You have to actually look.
+- While you're typing, it waits a little longer, so focus never jumps in the middle of a word.
+- While you're using the mouse, it stays out of the way. A click is already a decision.
+- Looking down at your phone or the desk? Nothing happens.
+- If you click or Alt-Tab yourself, it never undoes it.
+
+**It gets out of the way.**
+- Pause any time with **Ctrl+Alt+Shift+G**, or by clicking the tray icon.
+- It pauses by itself (and turns the camera off) when you lock the PC, it sleeps, or the screen turns off.
+- On a video call it hands the camera over and picks up again afterwards, or both run side by side if Windows
+  allows (see the FAQ).
+
+**It's private.**
+- Camera images stay in memory: never saved, never sent anywhere. Each frame becomes three head angles and is
+  thrown away.
+- It never connects to the internet. There's no account and no telemetry.
+- No keylogging: it notices *that* you typed, never *what*.
+
+**One monitor? Split it.** On a single wide screen, LookFocus can treat the left and right halves (or up to
+eight strips) as separate "screens".
+
+## Get started
+
+You'll need Windows 11, a webcam in front of you (the built-in laptop camera is fine) and
+[Python 3.12](https://www.python.org/downloads/). In PowerShell, inside this folder:
+
 ```powershell
 py -3.12 -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.lock
 .venv\Scripts\python.exe -m pip install --no-deps -e .
 ```
-Optional check that the camera works and which one LookFocus will use:
-```powershell
-.venv\Scripts\python.exe tools\cam_probe.py
-```
 
-## First run: calibrate
-LookFocus has to learn how *your* head is oriented when you look at each display, which takes about a
-minute. Calibration shows a dot on each display in turn (centre, left, right, top, bottom). Look at each dot
-**the way you naturally would when working on that screen**: turn your head as you normally do, without
-exaggerating and without using only your eyes.
-
-### Two or more monitors
+**Two or more monitors:**
 ```powershell
 .venv\Scripts\pythonw.exe -m lookfocus
 ```
-This starts the tray app. The icon shows a red **!** because nothing is calibrated yet. Right-click it and
-choose **Calibrate...**. Or, from a console:
-```powershell
-.venv\Scripts\lookfocus.exe calibrate
-```
+A tray icon appears (look under the **^** arrow at first). It shows a red **!** because LookFocus hasn't
+met your screens yet. Right-click it and choose **Calibrate...**
 
-### One monitor (zone mode)
-With a single monitor, LookFocus can split it into side-by-side **zones** that act like separate displays.
-This is handy with two windows side by side on a wide screen.
+**One monitor (split into two halves):**
 ```powershell
-.venv\Scripts\lookfocus.exe calibrate --zones 2     # 2 to 8 zones; this also sets "zones" in the config
+.venv\Scripts\lookfocus.exe calibrate --zones 2
 .venv\Scripts\pythonw.exe -m lookfocus
 ```
-Without zones on a single monitor, LookFocus says there's only one display and does nothing. To set zones
-from the tray instead, choose **Open config**, set `"zones": 2`, save, then choose **Calibrate...**.
 
-At the end of calibration LookFocus checks that the displays can be told apart. If two of them are too
-close together, it tells you so (see [Camera placement](#camera-placement-and-lighting)).
+During calibration, look at each dot **the way you normally would** when working there: turn your head
+naturally, don't just move your eyes. Then right-click the icon and tick **Start with Windows** if you want it
+around every day.
 
-Recalibrate whenever you move the camera, the laptop or a monitor, or change the camera-sharing setting
-(it changes the camera's resolution). LookFocus notices added or removed monitors and asks for it.
+Prefer a folder you can just run, without Python? See [Standalone build](docs/GUIDE.md#standalone-build).
 
-## Everyday use
-Start the tray app with `.venv\Scripts\pythonw.exe -m lookfocus`, which opens no console window, or turn on
-**Start with Windows**. The icon may first appear under the taskbar's **^** overflow; drag it onto the
-taskbar to keep it visible.
+## The tray icon
 
-| icon | meaning |
+| | means |
 |---|---|
-| green, eye | active: watching, and switching when you face another display |
-| amber ring | no face in view (or the camera is starting); runs at ~2.5 fps and doesn't switch |
-| grey, pause bars | paused: by you, while locked/asleep/screen off, or the camera was lent to another app. **The camera is off while paused.** |
-| blue crosshair | calibrating |
-| red ! | needs attention: not calibrated, only one display, display layout changed, or a failure (hover for details) |
+| <img src="docs/media/icon-active.png" width="24" alt="green eye"> | Watching. Switches when you face another screen. |
+| <img src="docs/media/icon-no_face.png" width="24" alt="amber ring"> | Can't see your face right now, so nothing switches. |
+| <img src="docs/media/icon-paused.png" width="24" alt="grey pause"> | Paused (by you, or because the PC is locked or asleep). Camera off. |
+| <img src="docs/media/icon-calibrating.png" width="24" alt="blue crosshair"> | Calibrating. |
+| <img src="docs/media/icon-error.png" width="24" alt="red exclamation mark"> | Needs you. Hover over it to see why (usually: calibrate). |
 
-Hovering shows the current state, for example "LookFocus: facing Zone 2/2". Left-click toggles
-pause. Right-click menu:
-- **Pause / Resume.** The pause hotkey **Ctrl+Alt+Shift+G** works from anywhere.
-- **Calibrate / Recalibrate...** Press **Esc** to cancel; nothing changes until a calibration completes.
-- **Choose camera.** Automatic, or a specific camera. Saved in the config.
-- **Camera sharing...** Explains and opens Windows' "use the camera in several apps" setting (see below).
-- **Open config.** Opens `config.json` in your editor. Saved changes apply within a few seconds.
-- **Debug view.** A live window with the camera image, head angles and which display you're facing; useful
-  for tuning. Close it with Esc or q.
-- **Start with Windows** (a per-user sign-in entry, no admin rights needed) and **Quit**.
+Right-click for **Pause**, **Recalibrate**, **Choose camera**, **Debug view** (see what LookFocus sees),
+**Open config**, **Start with Windows** and **Quit**.
 
-When it switches:
-- You face another display for **0.3 s** (1 s if you typed in the last 2 s, so focus never jumps
-  mid-word).
-- Not while you're using the mouse, nor for 1.5 s after. Clicking is already a choice of window.
-- Looking at your phone, the desk or out of the window ("none of the displays") keeps the current
-  display. So does leaving the camera's view.
-- The window that gets focus is the one you last used on that display, or the topmost one if that was
-  closed. If the display has no window, nothing happens.
-- A click or Alt-Tab of your own is never undone. LookFocus only acts when the display you face changes.
+## Getting the best results
 
-Pausing also happens automatically while the PC is locked, asleep or the screen is off, and switching
-resumes afterwards. A manual pause stays paused until you resume it.
+- **Keep the camera still.** If you move the laptop, the camera or a monitor, recalibrate. It takes a minute.
+- **Put the camera in the middle**, above the screens, where it can see your face whichever screen you look
+  at.
+- **Give your screens some angle.** Two monitors side by side are easy. Two halves of a small laptop screen
+  are hard, because you barely turn your head between them.
+- **Light your face from the front.** A bright window behind you turns you into a silhouette.
+- **It follows one face.** If someone leans in closer to the camera than you, it may follow them.
 
-`lookfocus run` runs the same engine in a console, which is useful for testing changes. Add `--dry-run` to
-decide without moving focus, or `--stats` for CPU and fps every 10 s.
+Something feels off? Right-click the icon, open **Debug view**, and look at the screens one by one: you'll see
+exactly what LookFocus sees.
 
-## Camera placement and lighting
-LookFocus can only tell displays apart if your head points in noticeably different directions for each one.
-- **Keep the camera fixed** relative to your monitors. A laptop camera moves with the lid, so tilting the lid
-  changes every angle. Recalibrate after moving anything.
-- **Centre it.** The best spot is above the middle of your monitor arrangement, or above the display you
-  use most. The camera must see your face when you look at every display: check with **Debug view** while
-  you look at each corner.
-- **Displays should be at least ~10° apart.** Two monitors side by side easily are. Zones on one laptop
-  screen are borderline, because you hardly turn your head between the halves of a 15" screen at arm's
-  length. Two zones on a 27"+ monitor work well. The calibration check warns when displays are too close.
-  Turn your head a little more than you would for your eyes alone.
-- **Distance:** roughly 40–100 cm, with your whole face in the frame. Glasses are fine. A hand on your
-  chin, a mug or a mask can hide landmarks and cause brief "no face" readings, which don't switch
-  anything.
-- **Lighting:** light your face evenly from the front or the side of the screens. Avoid a bright window or
-  lamp **behind** you, which turns your face into a silhouette. A dim room works if the camera still shows
-  your face clearly, but noise goes up. If the debug view shows "camera image is dark", there's too little
-  light or the lens is covered.
-- **Privacy shutter:** if your camera has a physical or software shutter and it's closed, LookFocus reports
-  "camera image is dark" or "frozen" and simply doesn't switch.
-- **One face:** LookFocus tracks one face. If someone else is in view and closer to the camera, it may
-  follow them.
+## Make it yours
 
-## Tuning guide
-Settings live in `%APPDATA%\LookFocus\config.json` (tray: **Open config**). Edit and save: LookFocus applies
-the change within a few seconds. A bad value is reported in a notification and replaced by its default; it
-never stops LookFocus. Use **Debug view** to see what LookFocus sees while you tune.
+Right-click → **Open config**, change a number, save. It takes effect within a few seconds.
 
-| symptom | try |
+| If... | change |
 |---|---|
-| switches on a quick glance | raise `dwell_ms` (300 → 500) |
-| feels slow to switch | lower `dwell_ms` (→ 200); check `typing_dwell_ms` if it's slow only after typing |
-| focus moves while you type and glance at notes on the other screen | raise `typing_dwell_ms` (1000 → 2000) or `typing_grace_ms` |
-| flips back and forth when you look near the bezel | raise `hysteresis` (2 → 3–4) |
-| reluctant to switch to the edge of a display | lower `hysteresis`, or recalibrate turning your head naturally |
-| switches when you look at your phone or desk | lower `none_margin` (6 → 4) |
-| ignores you when you look at a far corner of a display | raise `none_margin` (6 → 8–10) |
-| switching right after using the mouse is too slow | lower `mouse_grace_ms` (1500 → 800) |
-| CPU use too high | lower `fps` (15 → 10); about half the CPU goes to face tracking |
-| a menu bar flashes in some app when focus arrives | set `allow_alt_fallback` to `false` |
-| want the pointer to follow focus | `move_cursor_on_switch: true` |
-| camera slow to start | `camera_backend: "dshow"` (the other backend is always tried as a fallback) |
-| up/down (stacked monitors) unreliable | try `pose_source: "lm3d"` (no recalibration needed) |
+| it switches on quick glances | `dwell_ms` from 300 to 500 |
+| it feels slow | `dwell_ms` to 200 |
+| it flips back and forth near the edge between screens | `hysteresis` from 2 to 3 or 4 |
+| it switches when you look at your phone | `none_margin` from 6 to 4 |
+| you want the mouse pointer to follow too | `move_cursor_on_switch` to `true` |
+| you want a different pause shortcut | `hotkey`, e.g. `"ctrl+alt+p"` |
 
-All settings:
+Every setting is explained in the [guide](docs/GUIDE.md#settings).
 
-| setting | default | range | meaning |
-|---|---|---|---|
-| `dwell_ms` | 300 | 0–5000 | how long you must face another display before it gets focus |
-| `typing_dwell_ms` | 1000 | 0–10000 | the dwell used right after typing |
-| `typing_grace_ms` | 2000 | 0–30000 | "right after typing" = within this long of a keyboard event |
-| `mouse_grace_ms` | 1500 | 0–30000 | no switching while the mouse moves or a button is down, and this long after |
-| `hysteresis` | 2.0 | 0–50 | how much more clearly you must face a new display than the current one (normalized calibration units, roughly 1–2° each) |
-| `none_margin` | 6.0 | 0.5–100 | how far outside every display a pose must be to count as "none" (same units) |
-| `move_cursor_on_switch` | false | | also move the pointer to the newly focused display |
-| `allow_alt_fallback` | true | | allow the last-resort Alt key tap when Windows refuses focus |
-| `fps` | 15 | 1–30 | camera frames processed per second while a face is visible |
-| `camera_backend` | "msmf" | msmf, dshow | Windows camera API tried first |
-| `camera_index` / `camera_name` / `camera_path` | automatic | | the camera to use; set by **Choose camera** |
-| `yield_camera_to_other_apps` | true | | release the camera when another app needs it (see below) |
-| `zones` | 0 | 0, 2–8 | split the primary monitor into N side-by-side zones; 0 = one display per monitor |
-| `pose_source` | "matrix" | matrix, lm3d, lm2d | which head-angle estimate to classify |
-| `hotkey` | "ctrl+alt+shift+g" | | pause hotkey: modifiers (ctrl, alt, shift, win) + a letter, digit, F1–F24 or a named key such as `pause` or `space` |
-| `notifications` | true | | tray notifications |
-| `log_level` | "INFO" | DEBUG, INFO, WARNING, ERROR | log detail |
+## FAQ
 
-## Video calls and camera sharing
-Without extra settings, Windows lets only one app at a time get images from a camera. LookFocus watches for
-other apps opening the camera (a video call, the Camera app, a browser). When one does, LookFocus **releases
-the camera**, shows a notification and resumes when that app is done.
+**Does it track my eyes?**
+No, it follows where your head points. That works with an ordinary webcam and means a glance from the corner
+of your eye doesn't move anything.
 
-Windows 11 24H2 (build 26100.3321) and later also have **"Allow multiple apps to use camera at the same
-time"** under *Settings > Bluetooth & devices > Cameras > (your camera) > Advanced camera options*. With it
-on, LookFocus and your video call both work at the same time. The tray's **Camera sharing...** item tells
-you whether your Windows has it and opens the page. LookFocus also offers it once, the first time it finds
-the setting off.
+**Does it record or upload video?**
+No. Images are processed in memory and thrown away immediately. LookFocus never connects to the internet. At
+startup it checks its face-tracking library and model, and refuses to run a version that could phone home.
 
-Note that with the setting on, Windows serves every app the resolution chosen in camera settings. Changing
-the setting therefore changes what LookFocus sees, and LookFocus suggests recalibrating when that happens.
+**Is it a keylogger?**
+No. It uses the same "was there any input recently" signal Windows uses for idle timers. It never sees which
+keys you press.
 
-## Administrator windows
-Windows doesn't let a normal program take keyboard focus away from a window running as administrator.
-LookFocus can switch *to* an admin window, but not *away* from one. It notices this immediately, does nothing
-and mentions it once per session. If you work in admin windows a lot, run
-`.venv\Scripts\pythonw.exe -m lookfocus tray --elevated`. It asks for UAC approval at every start; Start with
-Windows can't do this, so autostart always runs non-elevated.
+**What happens on a video call?**
+Normally only one app can use the camera, so LookFocus steps aside when a call starts and comes back when it
+ends. It tells you when it does. On recent Windows 11 versions you can turn on *"Allow multiple apps to use
+camera at the same time"*, and then both work together. Tray menu → **Camera sharing...** checks it for you.
 
-## Troubleshooting
-- **Red ! icon:** hover for the reason.
-  - "not calibrated": choose Calibrate.
-  - "only one display": set `zones` (see [One monitor](#one-monitor-zone-mode)).
-  - "display layout changed": a monitor was added, removed or moved since calibration; recalibrate.
-  - "stopped: ...": an internal failure. Check the log, then Quit and start again.
-- **Doesn't switch:**
-  - Open **Debug view**. Is your face detected (landmarks drawn)? Does "facing" change when you turn?
-  - Not paused? (Grey icon. Try Ctrl+Alt+Shift+G.)
-  - Did you use the mouse within 1.5 s?
-  - Is there a window on the target display?
-  - Is the current window an admin window (see above)?
-- **Switches to the wrong display:** recalibrate, and check that the camera hasn't moved. If the
-  calibration result warned that displays are close, move the camera to the centre, or turn your head more
-  during calibration and use.
-- **"Camera released for ..." notifications during calls:** expected with camera sharing off. Turn the
-  setting on to use both.
-- **Hotkey doesn't work:** another app may own the combination (LookFocus says so when it starts). Pick
-  another `hotkey` in the config.
-- **"LookFocus is already running":** only one copy runs at a time. Look for its tray icon, including under
-  the **^** overflow.
-- **Logs:** `%APPDATA%\LookFocus\logs\lookfocus.log` (rotated at 1 MB, 3 kept). Set `"log_level": "DEBUG"`
-  for more detail.
-- **Start over:** Quit, then delete `%APPDATA%\LookFocus` (config, calibration, logs).
+**Will it steal focus while I'm typing?**
+It waits longer while you type and never switches while you use the mouse. It only acts when you clearly look
+at another screen.
 
-## Known limitations
-- **Head pose, not eye gaze.** You have to turn your head; eye-only glances aren't detected. This is by
-  design, because head pose works with ordinary webcams.
-- **Displays only.** LookFocus picks a display and focuses the last window used there. It doesn't choose
-  between windows or panes on the same display.
-- **Calibration is tied to the camera:** its position and its resolution mode (the camera-sharing setting).
-  Change either and you need to recalibrate.
-- **Scrolling with the mouse wheel counts as typing** (no pointer movement): it only lengthens the next
-  dwell to 1 s.
-- **Activation side effects.** Windows refuses focus requests from background programs, so LookFocus
-  escalates. When a plain request is refused, it attaches to the input of the target's thread, then sends
-  an unassigned virtual key tap, and as a last resort an Alt tap, which can flash an app's menu bar (turn
-  off with `allow_alt_fallback`). On the test machine, Win32 apps (Explorer, VS Code, Terminal, Firefox)
-  and Store apps (Calculator, Settings) all switched without reaching the Alt stage. The secure desktop
-  (UAC prompts, the lock screen) can never be focused.
-- **Elevated windows** need `--elevated`; see above. UIAccess isn't used.
-- **Resource use** (test machine, 15 fps, face in view): 6–8% of total CPU and about 200 MB of memory
-  (working set; ~270 MB committed), mostly mediapipe and OpenCV. With no face in view it uses about 1% CPU;
-  while paused it uses none and the camera is off.
-- **Untested (one-monitor development machine):**
-  - two or more physical monitors, especially with **different DPI scaling** or **different
-    resolutions**;
-  - arrangement quirks: monitors stacked vertically, offset or with negative coordinates, portrait
-    orientation, very different viewing distances;
-  - plugging or unplugging monitors, or docking and undocking a laptop, while LookFocus runs (it's designed
-    to pause and ask for recalibration);
-  - external USB cameras, DirectShow-only cameras, several cameras at once;
-  - Windows 10;
-  - full-screen games and other exclusive-mode apps.
+**Some windows won't let it switch away. Why?**
+Windows protects programs running as administrator. LookFocus can switch *to* them but not *away* from them,
+and tells you once. If you live in admin windows, start it with
+`.venv\Scripts\pythonw.exe -m lookfocus tray --elevated`.
 
-  Monitor layout, DPI handling and window-to-display mapping are unit-tested with synthetic layouts. Zone
-  mode on one real monitor is tested end to end.
+**Does it slow my PC down?**
+On the test laptop it uses about 6-8% of the processor while it sees you, about 1% when you're away, and
+nothing while paused.
 
-## Optional: standalone build
-A folder with `LookFocus.exe` that runs without Python, built with PyInstaller (no installer):
-```powershell
-.venv\Scripts\python.exe -m pip install -r requirements-build.lock
-.venv\Scripts\python.exe tools\build_exe.py
-```
-This produces `dist\LookFocus\` (~225 MB). The folder contains:
-- `LookFocus.exe`, the tray app (same as `pythonw -m lookfocus`);
-- `lookfocus-cli.exe`, the console commands (`lookfocus-cli calibrate --zones 2`, `run`, `watch`,
-  `camera-sharing`);
-- `_internal\`, which must stay next to them.
+**Mac or Linux? Windows 10?**
+Windows 11 only. Windows 10 might work but hasn't been tested.
 
-Copy the whole folder wherever you like. **Start with Windows** points at whichever copy you last started.
-The build script checks the result: the model hash, mediapipe without network APIs, OpenCV's FFmpeg
-plugin (network-capable, not needed for cameras) left out, and one face-tracker run inside the built exe.
-matplotlib is bundled because mediapipe imports it. In the built app it rebuilds a small font list in a temp
-folder at each start; Quit removes it.
+**How do I get rid of it?**
+Untick **Start with Windows**, choose **Quit**, delete this folder and `%APPDATA%\LookFocus`.
 
-The executables are **unsigned**:
-- SmartScreen may say "Windows protected your PC" (choose *More info > Run anyway*).
-- Antivirus products sometimes flag PyInstaller-built programs as suspicious, a known false positive
-  caused by how its launcher unpacks Python.
-- Building it yourself from this source is the way to be sure what's in it. If your antivirus quarantines
-  it, add an exclusion for the folder or run from source instead.
+## Good to know
 
-## Uninstall
-1. Untick **Start with Windows** (or delete the `LookFocus` value under
-   `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`).
-2. **Quit**.
-3. Delete the project folder or `dist\LookFocus`, and `%APPDATA%\LookFocus`.
+- It picks the **screen**, not a window within a screen. Split panes on one screen are up to you.
+- If the camera or a monitor moves, it needs a fresh calibration.
+- It has been tested on one laptop with one monitor split into zones. **Setups with several real monitors
+  haven't been tested yet**, especially monitors with different scaling or resolutions, stacked or
+  portrait monitors, docking and undocking, external USB cameras, and Windows 10. Feedback welcome.
 
-## Development
-```powershell
-.venv\Scripts\python.exe -m pytest                 # unit tests, hardware-free (includes privacy checks)
-.venv\Scripts\python.exe -m ruff check .
-.venv\Scripts\python.exe -m ruff format --check .
-```
-Tools:
-- `tools\cam_probe.py`: cameras, backends and open latency.
-- `tools\debug_pose.py [--guided]`: live head-pose viewer with its own camera.
-- `tools\focus_test.py --zones 2 --windows A B`: measures the focus-activation ladder between two windows.
-- `tools\cam_share_test.py`: can a second app use the camera at the same time?
-- `tools\net_audit.py` (or `--pid N` to watch a running copy): records any network connection.
-- `python -m lookfocus.camera_activity`: which processes use the camera.
+The full list, with details, is in the [guide](docs/GUIDE.md#known-limitations).
 
-Layout: `src/lookfocus/`. The pure, unit-tested logic (pose, displays, calibration, classifier, decision,
-input tracker, targeting, config, camera-usage policy) is separate from the Windows parts (capture,
-monitors, overlay, focus, tray, system events). `CLAUDE.md` has the conventions; `DECISIONS.md` has the why
-and the measurements behind every choice. mediapipe must stay at 0.10.33; after any dependency change run
-pytest and `tools\net_audit.py`.
+## More
+
+- **[User guide](docs/GUIDE.md)**: every setting, troubleshooting, the standalone build, uninstalling,
+  developer notes.
+- **[DECISIONS.md](DECISIONS.md)**: why it works the way it does, with the measurements behind each choice.
