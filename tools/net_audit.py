@@ -6,7 +6,10 @@ landmarker configuration LookFocus uses, while a background thread polls the Win
 close(), because some telemetry clients upload on shutdown.
 
 Usage:  .venv\\Scripts\\python.exe tools\\net_audit.py [--seconds 30] [--tail 10]
-Exit code 0 = no connections observed, 1 = connections observed.
+        .venv\\Scripts\\python.exe tools\\net_audit.py --pid PID [--seconds 60]
+            watch an already running LookFocus (e.g. the frozen LookFocus.exe) and its child processes
+            (the camera-sharing probe) for TCP connections and bound UDP sockets instead.
+Exit code 0 = nothing observed, 1 = connections observed.
 """
 
 from __future__ import annotations
@@ -34,9 +37,39 @@ _GetExtendedTcpTable.argtypes = [
     wintypes.ULONG,
 ]
 _GetExtendedTcpTable.restype = wintypes.DWORD
+_GetExtendedUdpTable = _iphlpapi.GetExtendedUdpTable
+_GetExtendedUdpTable.argtypes = _GetExtendedTcpTable.argtypes
+_GetExtendedUdpTable.restype = wintypes.DWORD
+
+
+class PROCESSENTRY32W(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", wintypes.DWORD),
+        ("cntUsage", wintypes.DWORD),
+        ("th32ProcessID", wintypes.DWORD),
+        ("th32DefaultHeapID", ctypes.c_size_t),
+        ("th32ModuleID", wintypes.DWORD),
+        ("cntThreads", wintypes.DWORD),
+        ("th32ParentProcessID", wintypes.DWORD),
+        ("pcPriClassBase", ctypes.c_long),
+        ("dwFlags", wintypes.DWORD),
+        ("szExeFile", ctypes.c_wchar * 260),
+    ]
+
+
+_k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+_k32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+_k32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+_k32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+_k32.Process32FirstW.restype = wintypes.BOOL
+_k32.Process32NextW.argtypes = _k32.Process32FirstW.argtypes
+_k32.Process32NextW.restype = wintypes.BOOL
+_k32.CloseHandle.argtypes = [wintypes.HANDLE]
 
 AF_INET, AF_INET6 = 2, 23
 TCP_TABLE_OWNER_PID_ALL = 5
+UDP_TABLE_OWNER_PID = 1
+TH32CS_SNAPPROCESS = 0x2
 ERROR_INSUFFICIENT_BUFFER = 122
 TCP_STATES = {
     1: "CLOSED",
@@ -58,8 +91,57 @@ def _port(dw: int) -> int:
     return ((dw & 0xFF) << 8) | ((dw >> 8) & 0xFF)
 
 
-def tcp_connections(pid: int) -> set[tuple[str, str, str]]:
-    """Return {(local, remote, state)} for TCP rows owned by pid."""
+def descendants(root: int) -> set[int]:
+    """root plus every still-running process it started, directly or not."""
+    snap = _k32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if not snap or snap == wintypes.HANDLE(-1).value:
+        return {root}
+    parent: dict[int, int] = {}
+    try:
+        e = PROCESSENTRY32W()
+        e.dwSize = ctypes.sizeof(e)
+        ok = _k32.Process32FirstW(snap, ctypes.byref(e))
+        while ok:
+            parent[e.th32ProcessID] = e.th32ParentProcessID
+            ok = _k32.Process32NextW(snap, ctypes.byref(e))
+    finally:
+        _k32.CloseHandle(snap)
+    found, grew = {root}, True
+    while grew:
+        new = {p for p, pp in parent.items() if pp in found and p not in found and p != pp}
+        found |= new
+        grew = bool(new)
+    return found
+
+
+def udp_endpoints(pids: set[int]) -> set[tuple[str, str, str]]:
+    """Return {(local, "-", "UDP pid=N")} for UDP sockets bound by any of pids (QUIC would show here)."""
+    out: set[tuple[str, str, str]] = set()
+    for family, row in ((AF_INET, 12), (AF_INET6, 28)):
+        size = wintypes.DWORD(0)
+        _GetExtendedUdpTable(None, ctypes.byref(size), False, family, UDP_TABLE_OWNER_PID, 0)
+        buf = ctypes.create_string_buffer(size.value + 4096)
+        size = wintypes.DWORD(len(buf))
+        if _GetExtendedUdpTable(buf, ctypes.byref(size), False, family, UDP_TABLE_OWNER_PID, 0) != 0:
+            continue
+        raw = buf.raw
+        (n,) = struct.unpack_from("<I", raw, 0)
+        for i in range(n):
+            off = 4 + i * row
+            if family == AF_INET:
+                la, lp, owner = struct.unpack_from("<3I", raw, off)
+                loc = f"{ipaddress.IPv4Address(struct.pack('<I', la))}:{_port(lp)}"
+            else:
+                _, lp, owner = struct.unpack_from("<3I", raw, off + 16)
+                loc = f"[{ipaddress.IPv6Address(raw[off : off + 16])}]:{_port(lp)}"
+            if owner in pids:
+                out.add((loc, "-", f"UDP pid={owner}"))
+    return out
+
+
+def tcp_connections(pid: int | set[int]) -> set[tuple[str, str, str]]:
+    """Return {(local, remote, state)} for TCP rows owned by pid (or any pid in a set)."""
+    pids = {pid} if isinstance(pid, int) else pid
     out: set[tuple[str, str, str]] = set()
     for family in (AF_INET, AF_INET6):
         size = wintypes.DWORD(0)
@@ -74,7 +156,7 @@ def tcp_connections(pid: int) -> set[tuple[str, str, str]]:
         if family == AF_INET:
             for i in range(n):
                 st, la, lp, ra, rp, owner = struct.unpack_from("<6I", raw, 4 + i * 24)
-                if owner == pid:
+                if owner in pids:
                     loc = f"{ipaddress.IPv4Address(struct.pack('<I', la))}:{_port(lp)}"
                     rem = f"{ipaddress.IPv4Address(struct.pack('<I', ra))}:{_port(rp)}"
                     out.add((loc, rem, TCP_STATES.get(st, str(st))))
@@ -85,7 +167,7 @@ def tcp_connections(pid: int) -> set[tuple[str, str, str]]:
                 _, lp = struct.unpack_from("<II", raw, off + 16)
                 ra = raw[off + 24 : off + 40]
                 _, rp, st, owner = struct.unpack_from("<4I", raw, off + 40)
-                if owner == pid:
+                if owner in pids:
                     loc = f"[{ipaddress.IPv6Address(la)}]:{_port(lp)}"
                     rem = f"[{ipaddress.IPv6Address(ra)}]:{_port(rp)}"
                     out.add((loc, rem, TCP_STATES.get(st, str(st))))
@@ -93,9 +175,10 @@ def tcp_connections(pid: int) -> set[tuple[str, str, str]]:
 
 
 class Poller(threading.Thread):
-    def __init__(self, pid: int, interval: float = 0.01) -> None:
+    def __init__(self, pid: int, interval: float = 0.01, follow: bool = False) -> None:
         super().__init__(daemon=True)
-        self.pid, self.interval = pid, interval
+        self.pid, self.interval, self.follow = pid, interval, follow
+        self.pids, self.all_pids = {pid}, {pid}
         self.seen: dict[tuple[str, str, str], tuple[float, str]] = {}
         self.phase = "startup"
         self.polls = 0
@@ -104,7 +187,11 @@ class Poller(threading.Thread):
 
     def run(self) -> None:
         while not self._halt.is_set():
-            for conn in tcp_connections(self.pid):
+            if self.follow and self.polls % 20 == 0:  # child processes, refreshed every ~0.2 s
+                self.pids = descendants(self.pid)
+                self.all_pids |= self.pids
+            conns = tcp_connections(self.pids) | (udp_endpoints(self.pids) if self.follow else set())
+            for conn in conns:
                 self.seen.setdefault(conn, (time.perf_counter() - self.t0, self.phase))
             self.polls += 1
             self._halt.wait(self.interval)
@@ -118,7 +205,10 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--seconds", type=float, default=30.0, help="inference duration")
     ap.add_argument("--tail", type=float, default=10.0, help="keep polling this long after close()")
+    ap.add_argument("--pid", type=int, help="watch this running process and its children instead")
     args = ap.parse_args()
+    if args.pid:
+        return watch(args.pid, args.seconds)
 
     if not MODEL.exists():
         print(f"model not found: {MODEL}")
@@ -168,6 +258,23 @@ def main() -> int:
     print(f"RESULT: {len(poller.seen)} TCP connection(s) observed:")
     for (loc, rem, st), (t, phase) in sorted(poller.seen.items(), key=lambda kv: kv[1][0]):
         print(f"  t={t:6.2f}s phase={phase:<9} {loc} -> {rem} {st}")
+    return 1
+
+
+def watch(pid: int, seconds: float) -> int:
+    poller = Poller(pid, follow=True)
+    poller.phase = "watch"
+    poller.start()
+    time.sleep(seconds)
+    poller.stop()
+    children = sorted(poller.all_pids - {pid}) or "none"
+    print(f"watched pid {pid} (children seen: {children}), {poller.polls} table polls over {seconds:.0f}s")
+    if not poller.seen:
+        print("RESULT: no TCP connections or UDP sockets owned by these processes were observed.")
+        return 0
+    print(f"RESULT: {len(poller.seen)} endpoint(s) observed:")
+    for (loc, rem, st), (t, _phase) in sorted(poller.seen.items(), key=lambda kv: kv[1][0]):
+        print(f"  t={t:6.2f}s {loc} -> {rem} {st}")
     return 1
 
 

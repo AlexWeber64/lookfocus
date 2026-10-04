@@ -12,9 +12,12 @@ InputTracker is pure (unit tested); InputPoller is the Windows thread feeding it
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from dataclasses import dataclass
+
+log = logging.getLogger(__name__)
 
 # Pointer moves smaller than this (px) don't count as mouse *use*: keep-awake jigglers ("Move Mouse"
 # on the dev machine) nudge the pointer by a few pixels. They still explain the input event, so they're
@@ -123,12 +126,19 @@ class InputPoller(threading.Thread):
         kernel32.GetTickCount.restype = wintypes.DWORD
         lii = LASTINPUTINFO()
         lii.cbSize = ctypes.sizeof(lii)
+        failures = 0
         while not self._halt.is_set():
-            if user32.GetLastInputInfo(ctypes.byref(lii)):
-                idle_ms = (kernel32.GetTickCount() - lii.dwTime) & 0xFFFFFFFF  # tick wraps every 49.7 days
-                now = self.clock()
-                with self._lock:
-                    self._state = self.tracker.update(
-                        now, idle_ms / 1000.0, cursor_pos(), mouse_buttons_down()
-                    )
+            try:
+                if user32.GetLastInputInfo(ctypes.byref(lii)):
+                    idle_ms = (kernel32.GetTickCount() - lii.dwTime) & 0xFFFFFFFF  # wraps every 49.7 days
+                    now = self.clock()
+                    with self._lock:
+                        self._state = self.tracker.update(
+                            now, idle_ms / 1000.0, cursor_pos(), mouse_buttons_down()
+                        )
+                failures = 0
+            except Exception:  # a dead input thread would silently disable the mouse/typing guards
+                failures += 1
+                if failures in (1, 10) or failures % 1000 == 0:
+                    log.exception("input polling failed (%d in a row)", failures)
             self._halt.wait(self.interval)

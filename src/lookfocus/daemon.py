@@ -186,6 +186,7 @@ class Daemon:
         self.executor = FocusExecutor(self)
         self._paused = False
         self._frame: tuple[int, int] = (0, 0)
+        self._next_layout = 0.0
         self._halt = threading.Event()
         self._thread = threading.Thread(target=self._decision_loop, name="decision", daemon=True)
         self._status: tuple[str, str] = ("starting", "")
@@ -266,41 +267,58 @@ class Daemon:
             d = None
         self.machine.seed(d.id if d else None)
 
+    def dead_threads(self) -> list[str]:
+        """Engine threads that ended on their own (a bug, a native failure); the tray restarts the engine."""
+        if self._halt.is_set():
+            return []
+        threads = (self.input, self.tracker, self.executor, self.capture, self._thread)
+        return [t.name for t in threads if t.ident is not None and not t.is_alive()]
+
     def _decision_loop(self) -> None:
-        seen = 0
-        next_layout = self.clock() + self.settings.layout_check_s
-        src = self.settings.pose_source
+        seen, failures = 0, 0
+        self._next_layout = self.clock() + self.settings.layout_check_s
         while not self._halt.is_set():
             seq, sample = self.poses.wait_newer(seen, 0.1)
             fresh, seen = seq != seen, seq
-            now = self.clock()
-            if now >= next_layout:
-                next_layout = now + self.settings.layout_check_s
-                try:
-                    self._refresh_layout()
-                except Exception:
-                    log.exception("layout check failed")
-            if fresh and sample is not None and sample.frame != self._frame:
-                self._frame = sample.frame
-                if self.calibration.camera_mismatch(sample.frame):
-                    cw, ch = self.calibration.camera
-                    log.warning("camera mode %dx%d differs from calibration (%dx%d)", *sample.frame, cw, ch)
-                    self.emit("camera_mode_changed", now=sample.frame, calibrated=self.calibration.camera)
-            display, distances = None, {}  # a timeout with no new frame counts as a gap, never as a pose
-            if fresh and sample is not None and sample.pose is not None and sample.status == "tracking":
-                r = self.classifier.classify(*sample.pose.features(src))
-                display, distances = (r.display or NONE), r.distance
-            inp = self.input.state()
-            obs = Observation(
-                display, distances, inp.mouse_active_at, inp.keyboard_at, self._paused or not self.layout_ok
+            try:
+                self._decide(fresh, sample)
+                failures = 0
+            except Exception:  # keep deciding: one bad sample must not end switching for the session
+                failures += 1
+                if failures in (1, 10) or failures % 1000 == 0:
+                    log.exception("decision step failed (%d in a row)", failures)
+                self._halt.wait(0.2)
+
+    def _decide(self, fresh: bool, sample: PoseSample | None) -> None:
+        src = self.settings.pose_source
+        now = self.clock()
+        if now >= self._next_layout:
+            self._next_layout = now + self.settings.layout_check_s
+            try:
+                self._refresh_layout()
+            except Exception:
+                log.exception("layout check failed")
+        if fresh and sample is not None and sample.frame != self._frame:
+            self._frame = sample.frame
+            if self.calibration.camera_mismatch(sample.frame):
+                cw, ch = self.calibration.camera
+                log.warning("camera mode %dx%d differs from calibration (%dx%d)", *sample.frame, cw, ch)
+                self.emit("camera_mode_changed", now=sample.frame, calibrated=self.calibration.camera)
+        display, distances = None, {}  # a timeout with no new frame counts as a gap, never as a pose
+        if fresh and sample is not None and sample.pose is not None and sample.status == "tracking":
+            r = self.classifier.classify(*sample.pose.features(src))
+            display, distances = (r.display or NONE), r.distance
+        inp = self.input.state()
+        obs = Observation(
+            display, distances, inp.mouse_active_at, inp.keyboard_at, self._paused or not self.layout_ok
+        )
+        target = self.machine.update(now, obs)
+        if target is not None:
+            log.info(
+                "facing %s", self.display_by_id[target].short if target in self.display_by_id else target
             )
-            target = self.machine.update(now, obs)
-            if target is not None:
-                log.info(
-                    "facing %s", self.display_by_id[target].short if target in self.display_by_id else target
-                )
-                self.executor.request(target)
-            self._set_status(*self._describe(sample))
+            self.executor.request(target)
+        self._set_status(*self._describe(sample))
 
     def _describe(self, sample: PoseSample | None) -> tuple[str, str]:
         if self._paused:

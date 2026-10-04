@@ -725,3 +725,119 @@ Paused = no switching **and the camera released** (LED off).
 - `lookfocus tray --elevated` relaunches as administrator (UAC prompt) so it can take focus *from*
   administrator windows (D-030). The Run key can't elevate silently, so autostart is always non-elevated,
   as documented. No UIAccess.
+
+M5 hardware result (user): tray, hotkey, lock/unlock, sleep and display off, autostart, tray recalibration,
+debug view, camera menus, live config edits and quit all checked: "Everything looks great!"
+
+## M6 — hardening, README, optional standalone build
+
+### D-040 Hardening: failures are logged, contained and visible **[5 tests + soak run]**
+A review of what could fail silently under `pythonw` (no console, `sys.stderr` is None):
+- **Crash logging:** the tray installs `sys.excepthook` and `threading.excepthook`, so an uncaught
+  exception in any thread reaches the log file instead of vanishing.
+- **Loops that must not die:** the decision loop and the input poller now catch and log per iteration
+  (throttled: 1st, 10th, then every 1000th repeat). A dead input thread would have silently disabled the
+  mouse and typing guards; a dead decision loop would have ended switching for the session. The
+  foreground tracker and focus executor already did; the capture loop guards inference, and anything else
+  that ends it is caught by the watchdog below.
+- **Engine watchdog:** every 2 s the tray checks `Daemon.dead_threads()`. If any engine thread has ended, it
+  restarts the engine, at most 3 times in 10 min. After that it stays in the red error state
+  ("stopped: <reason>", with a notification pointing to the log), so a persistent fault such as the privacy
+  check never loops. An exception while *starting* the engine also shows as an error instead of being lost
+  in pystray's setup thread.
+- **Secure desktop:** `GetCursorPos` fails while a UAC prompt or the lock screen is up. It used to return
+  (0, 0), which read as a big mouse movement; it now returns the last known position.
+- **Autostart self-heal:** if Start with Windows is on but the Run key points at another copy (the venv
+  moved, or the user switched to the standalone build), the tray rewrites it at startup.
+- **Relaunch commands:** `paths.app_command()` builds "run this LookFocus again" for both source and frozen
+  runs (pythonw/python -m lookfocus, or LookFocus.exe/lookfocus-cli.exe). It's used by autostart,
+  `tray --elevated` and `run --elevated`, which used to hardcode `-m lookfocus`.
+- Already handled earlier, and reviewed: the camera's disconnect and stall reopen with backoff (D-014), a
+  bad config falls back field by field (D-038), an unreadable calibration shows "not calibrated", and
+  pystray re-adds the icon when Explorer restarts (`TaskbarCreated`).
+
+**Soak test** (real engine in dry run, real camera, 8.7 min): 4.5 min steady, then 10 pause/resume cycles,
+then 5 full engine restarts.
+- No dead threads. Every status kind was reported; 16 sharing probes completed.
+- Python threads 8 throughout and 1 after the final stop.
+- Private memory +2.6 MB over the run; GDI 0; USER objects 14 → 16, and 9 after stopping.
+- Kernel handles were flat while steady, then +2.3 per pause cycle and +23 per engine restart; back to the
+  starting count after the final stop.
+
+The per-component breakdown is in D-042.
+
+### D-041 Memory: OpenBLAS limited to one thread **[measured]**
+The soak showed **490 MB private** memory. Stage by stage, `import numpy` alone committed **235 MB**:
+numpy's bundled OpenBLAS reserves a buffer per core and starts a thread per core (8 here), although almost
+none of it becomes resident (working set +12 MB). LookFocus only does tiny matrix maths (affine fits over
+5 points), so `lookfocus/__init__.py` now sets `OPENBLAS_NUM_THREADS=1` (setdefault, so it can be
+overridden), next to the MSMF variable and for the same reason: it must happen before numpy loads.
+- Result, with the capture running: private **454 → 228 MB**, working set unchanged (~193 MB), 7 fewer idle
+  threads.
+- Standalone tray: 267 MB private, 209 MB working set.
+
+### D-042 Handle growth per camera reopen is inside OpenCV/Media Foundation **[measured]**
+Handle growth over 10 cycles of each component:
+- FaceTracker create/close: 0
+- SensorActivityMonitor start/stop: 0
+- `CameraSource` open/read/release: +2.5 handles and +0.4 USER objects per cycle
+- CaptureThread start/stop: +1.4
+- sharing probe: +1.3
+
+A bare `cv2.VideoCapture(0, CAP_MSMF)` open/read/release loop grows by **+5 handles per reopen, linearly**
+over 40 reopens; USER objects stop growing after the first batch. So the growth comes from OpenCV's MSMF
+backend or Media Foundation, not from LookFocus, and can't be fixed here except by reopening less.
+LookFocus reopens only on pause/resume, lock/unlock, display off/on, yielding the camera, and engine
+restarts: a few dozen times a day, so tens of thousands of days before the per-process handle limit
+matters. Recorded and not worked around.
+
+### D-043 Optional standalone build: PyInstaller one-folder, two executables **[built, self-checked, audited]**
+`tools/build_exe.py` + `packaging/lookfocus.spec`, PyInstaller **6.22.3** (pinned in
+`requirements-build.lock`; build-time only and not in the runtime lock). Output `dist\LookFocus\`:
+- **`LookFocus.exe`** (no console): the tray, which is also what autostart points at. **`lookfocus-cli.exe`**
+  (console): `calibrate`, `run`, `watch`, `camera-sharing`. Both share one `_internal` folder. A
+  windowed-only build would leave the CLI with no output and no stdin for calibration prompts.
+- `packaging/entry.py` dispatches `--probe-child`. In the frozen app, the camera-sharing probe re-runs the
+  app's own exe, since there's no `python -m`. Verified: the probe child ran and read ON.
+- mediapipe loads `tasks/c/libmediapipe.dll` via ctypes + `importlib.resources`, which PyInstaller can't
+  see. It's collected with `collect_dynamic_libs("mediapipe")` at its package path, where
+  `privacy.verify_runtime()` checks it.
+- **OpenCV's FFmpeg plugin is left out** (`opencv_videoio_ffmpeg*.dll`, 29 MB, links ws2_32). It only
+  serves video files and network streams; camera capture via MSMF/DSHOW is in `cv2.pyd`. `cv2.pyd`
+  itself imports `wsock32.dll` and has to stay. The dynamic audits have never seen it connect.
+- **matplotlib can't be left out:** the first build excluded it, and the frozen engine then reported "face
+  tracker unavailable: No module named 'matplotlib'". mediapipe's `vision/__init__` imports its drawing
+  utils, which import `matplotlib.pyplot`. The watchdog path did its job (error reported, no crash), but the
+  build's `--help` smoke test had passed, so the build now also runs **`lookfocus-cli.exe --self-check`**:
+  privacy checks, model, mediapipe and one inference inside the bundle. Side effect: PyInstaller's
+  matplotlib runtime hook gives each run a fresh temp `MPLCONFIGDIR` (font list rebuilt in ~0.4 s, removed
+  at exit; a force-killed run leaves ~100 KB behind).
+- Checks in `build_exe.py`: both executables present; model SHA-256; mediapipe native libraries
+  network-clean; no FFmpeg plugin; `--help`; `--self-check`. Result: **224 MB**, OK.
+- **Verified on this machine:**
+  - `lookfocus-cli.exe -v run --dry-run --stats` for 60 s under `tools/net_audit.py --pid` (new mode:
+    polls the TCP and UDP tables for the process and every descendant): camera on the NV12 fast path,
+    sharing probe ON, **no TCP connections or UDP sockets** from it or its 3 child processes; ~0.9% CPU
+    with no face in view.
+  - `LookFocus.exe`: hotkey registered, engine started, camera open, probe ON; a second launch shows
+    "already running".
+  - Positive control for the audit mode: a parent whose grandchild binds UDP and opens a loopback TCP
+    connection; all 4 endpoints reported.
+- Unsigned, and PyInstaller executables are a known antivirus false-positive pattern. The README says so,
+  explains SmartScreen's "Run anyway", and recommends building from source. No installer (out of scope).
+
+### D-044 README **[written]**
+The README is the user guide:
+- install from source;
+- calibration in multi-monitor and zone mode;
+- the tray (icon states, menu, hotkey, automatic pauses) and when switching does and doesn't happen;
+- camera placement and lighting (fixed camera, centred, displays ≥ ~10° apart, distance, backlight,
+  shutter, one face);
+- a symptom → setting tuning table plus a full config reference with defaults and ranges;
+- video calls and the camera-sharing setting;
+- administrator windows, troubleshooting and uninstall;
+- known limitations, with the untested multi-monitor items listed explicitly: different DPI per monitor,
+  different resolutions, vertical, offset and portrait arrangements, hot-plugging and docking, external and
+  DirectShow-only cameras, Windows 10, and exclusive full-screen apps.
+
+Version set to 1.0.0.

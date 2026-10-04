@@ -1,0 +1,9 @@
+# Optional standalone build (tools\build_exe.py), on top of requirements.lock. Build-time only: nothing here
+# ships in or runs inside the app except PyInstaller's bootloader.
+# Install: .venv\Scripts\python.exe -m pip install -r requirements-build.lock
+altgraph==0.17.5
+pefile==2024.8.26
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.8
+pywin32-ctypes==0.2.3
+setuptools==84.0.0

@@ -13,7 +13,7 @@ last-used window there. Spec milestones M0–M6; decisions and evidence live in 
   change run `pytest` (includes `tests/test_privacy.py`) and `tools\net_audit.py`.
 - Pure-logic modules (`classifier`, `decision`, and anything under test with scripted poses) must not import
   Win32/ctypes.windll, cv2 or mediapipe. Inject clocks; don't call `time.monotonic()` directly in them.
-- `OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS=0` is set in `lookfocus/__init__.py`. Scripts must
+- `OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS=0` (and `OPENBLAS_NUM_THREADS=1`, D-041) are set in `lookfocus/__init__.py`. Scripts must
   `import lookfocus` before `cv2`/`mediapipe`, with `# isort: split` after it so ruff can't reorder it.
 - Win32 via ctypes only (no pywin32, D-006). Always set `argtypes`/`restype`.
 - Don't trust Win32 return values for focus changes; verify with `GetForegroundWindow`.
@@ -41,11 +41,15 @@ py -3.12 -m venv .venv
 
 # tools
 .venv\Scripts\python.exe tools\cam_probe.py [--compare-set] [--backends msmf,dshow]
-.venv\Scripts\python.exe tools\net_audit.py [--seconds 60 --tail 20]
+.venv\Scripts\python.exe tools\net_audit.py [--seconds 60 --tail 20]   # or --pid N: watch a running copy
 .venv\Scripts\python.exe tools\cam_share_test.py        # can a 2nd app use the camera meanwhile?
 .venv\Scripts\python.exe tools\debug_pose.py [--guided]  # live pose viewer; --seconds N auto-quits
 .venv\Scripts\python.exe tools\focus_test.py --zones 2 --windows QUERY QUERY  # focus ladder test
 .venv\Scripts\python.exe -m lookfocus.camera_activity  # live per-process camera use
+
+# optional standalone build: dist\LookFocus\{LookFocus.exe, lookfocus-cli.exe}, unsigned
+.venv\Scripts\python.exe -m pip install -r requirements-build.lock
+.venv\Scripts\python.exe tools\build_exe.py
 ```
 
 ## Layout
@@ -54,7 +58,8 @@ py -3.12 -m venv .venv
   inputactivity (tracker), config.
   Windows: monitors, overlay, camera_enum, camera_sharing, camera_activity, capture, calibrator,
   windows_focus, daemon (engine threads), sysevents, autostart, debugview, tray. CLI: main (`python -m lookfocus`).
-- `tools/` — dev/debug scripts (cam_probe, cam_share_test, net_audit, debug_pose, focus_test)
+- `tools/` — dev/debug scripts (cam_probe, cam_share_test, net_audit, debug_pose, focus_test, build_exe)
+- `packaging/` — PyInstaller spec + shared entry point (dispatches `--probe-child` in the frozen exe)
 - `tests/` — pytest; hardware-free except for Windows-only checks that skip elsewhere
 - `models/face_landmarker.task` — committed, sha256-checked (see `models/SOURCE.md`)
 - User data: `%APPDATA%\LookFocus\` (config.json, calibration.json, logs)

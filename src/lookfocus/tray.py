@@ -16,8 +16,10 @@ import logging
 import logging.handlers
 import os
 import subprocess
+import sys
 import threading
 import time
+from collections import deque
 from dataclasses import replace
 from pathlib import Path
 
@@ -46,6 +48,9 @@ REASON_TEXT = {
 }
 MB_OK, MB_YESNO, MB_ICONINFO, MB_ICONWARNING = 0x0, 0x4, 0x40, 0x30
 MB_SETFOREGROUND, MB_TOPMOST, IDYES = 0x10000, 0x40000, 6
+# Engine restarts after a thread died: at most this many within the window, then stay in the error state
+# (a persistent failure, e.g. the privacy check, shouldn't loop forever).
+RESTART_BUDGET, RESTART_WINDOW_S = 3, 600.0
 
 
 def make_icon(state: str, size: int = 64) -> Image.Image:
@@ -92,6 +97,23 @@ def setup_logging(level: str) -> Path:
     return path
 
 
+def install_crash_logging() -> None:
+    """pythonw has no stderr: send uncaught exceptions (any thread) to the log file instead of nowhere."""
+
+    def hook(exc_type, exc, tb) -> None:
+        logging.getLogger("lookfocus").critical("uncaught exception", exc_info=(exc_type, exc, tb))
+
+    def thread_hook(args) -> None:
+        if args.exc_type is SystemExit:
+            return
+        name = args.thread.name if args.thread else "?"
+        info = (args.exc_type, args.exc_value, args.exc_traceback)
+        logging.getLogger("lookfocus").critical("uncaught exception in thread %s", name, exc_info=info)
+
+    sys.excepthook = hook
+    threading.excepthook = thread_hook
+
+
 def message_box(text: str, flags: int = MB_OK | MB_ICONINFO) -> int:
     user32 = ctypes.WinDLL("user32")
     user32.MessageBoxW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint]
@@ -124,6 +146,7 @@ class TrayApp:
                     self.cfg = replace(self.cfg, zones=cal.zones)
             K.save(self.cfg, self.cfg_path)
         self.log_path = setup_logging(self.cfg.log_level)
+        install_crash_logging()
         self._cfg_mtime = self._mtime()
         self.lock = threading.RLock()
         self.daemon = None
@@ -137,6 +160,7 @@ class TrayApp:
         self._icons = {s: make_icon(s) for s in STATE_COLORS}
         self._uipi_warned = False
         self._cameras: tuple[float, list] = (0.0, [])
+        self._restarts: deque[float] = deque()
         from lookfocus.sysevents import SystemEvents
 
         self.sys = SystemEvents(self._on_system, self.cfg.hotkey)
@@ -154,7 +178,12 @@ class TrayApp:
             log.warning("config: %s", p)
         if self.cfg_problems:
             self.notify("Config problems", "; ".join(self.cfg_problems)[:250])
-        threading.Thread(target=self._watch_config, name="config-watch", daemon=True).start()
+        try:
+            if autostart.refresh():
+                log.info("Start with Windows now points at this copy: %s", autostart.command())
+        except OSError as e:
+            log.warning("couldn't update the autostart entry: %s", e)
+        threading.Thread(target=self._housekeeping, name="housekeeping", daemon=True).start()
         self._start_engine()
 
     def quit(self) -> None:
@@ -172,6 +201,15 @@ class TrayApp:
         return settings_from_config(self.cfg)
 
     def _start_engine(self) -> None:
+        try:
+            self._start_engine_unchecked()
+        except Exception as e:  # e.g. a Win32 call failing at sign-in: show it instead of dying silently
+            log.exception("engine failed to start")
+            self._set_state("error", f"couldn't start: {type(e).__name__}")
+            detail = f"{type(e).__name__}: {e}"[:180]
+            self.notify("LookFocus couldn't start", f"{detail} (see {self.log_path})")
+
+    def _start_engine_unchecked(self) -> None:
         from lookfocus import monitors
         from lookfocus.daemon import Daemon
 
@@ -444,17 +482,45 @@ class TrayApp:
         except OSError:
             return 0.0
 
-    def _watch_config(self) -> None:
+    def _housekeeping(self) -> None:
+        """Every 2 s: apply config-file edits, and restart the engine if one of its threads died."""
         while not self._halt.wait(2.0):
-            m = self._mtime()
-            if m and m != self._cfg_mtime:
-                self._cfg_mtime = m
-                cfg, problems = K.load(self.cfg_path)
-                for p in problems:
-                    log.warning("config: %s", p)
-                if problems:
-                    self.notify("Config problems", "; ".join(problems)[:250])
-                self._apply_config(cfg, save=False)
+            for step in (self._check_config, self._check_engine):
+                try:
+                    step()
+                except Exception:
+                    log.exception("%s failed", step.__name__)
+
+    def _check_config(self) -> None:
+        m = self._mtime()
+        if m and m != self._cfg_mtime:
+            self._cfg_mtime = m
+            cfg, problems = K.load(self.cfg_path)
+            for p in problems:
+                log.warning("config: %s", p)
+            if problems:
+                self.notify("Config problems", "; ".join(problems)[:250])
+            self._apply_config(cfg, save=False)
+
+    def _check_engine(self) -> None:
+        d = self.daemon
+        dead = d.dead_threads() if d is not None else []
+        if not dead:
+            return
+        now = time.monotonic()
+        while self._restarts and now - self._restarts[0] > RESTART_WINDOW_S:
+            self._restarts.popleft()
+        _seq, last = d.poses.get()
+        why = (last.message if last is not None and last.message else "") or ", ".join(dead)
+        log.error("engine thread(s) stopped: %s (last camera status: %s)", dead, why)
+        if len(self._restarts) >= RESTART_BUDGET:
+            self._stop_engine()
+            self._set_state("error", f"stopped: {why}")
+            self.notify("LookFocus stopped", f"{why}"[:180] + f". Details in {self.log_path}")
+            return
+        self._restarts.append(now)
+        self._stop_engine()
+        self._start_engine()
 
     def _apply_config(self, new: K.Config, save: bool) -> None:
         old, self.cfg = self.cfg, new
@@ -656,12 +722,8 @@ def main(elevated: bool = False) -> int:
     from lookfocus.sysevents import claim_single_instance
 
     if elevated and not windows_focus.we_are_elevated():
-        import sys
-        from pathlib import Path as _P
-
-        pythonw = _P(sys.executable).with_name("pythonw.exe")
-        exe = str(pythonw if pythonw.exists() else sys.executable)
-        handle = windows_focus.start_elevated(exe, ["-m", "lookfocus", "tray"], show=1)
+        cmd = paths.app_command("tray")
+        handle = windows_focus.start_elevated(cmd[0], cmd[1:], show=1)
         return 0 if handle else 1
     monitors.enable_dpi_awareness()
     if not claim_single_instance():

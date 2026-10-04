@@ -10,7 +10,6 @@ import ctypes
 import logging
 import os
 import subprocess
-import sys
 import threading
 import time
 from collections.abc import Callable
@@ -188,17 +187,6 @@ GetTokenInformation = _sig(
     ctypes.c_void_p,
     DWORD,
     ctypes.POINTER(DWORD),
-)
-ShellExecuteW = _sig(
-    shell32,
-    "ShellExecuteW",
-    wintypes.HINSTANCE,
-    HWND,
-    wintypes.LPCWSTR,
-    wintypes.LPCWSTR,
-    wintypes.LPCWSTR,
-    wintypes.LPCWSTR,
-    ctypes.c_int,
 )
 
 
@@ -486,10 +474,17 @@ def move_cursor_into(rect: Rect) -> None:
     SetCursorPos(int(x), int(y))
 
 
+_last_cursor = (0, 0)
+
+
 def cursor_pos() -> tuple[int, int]:
+    """Pointer position. GetCursorPos fails while the secure desktop (UAC prompt, lock screen) is up:
+    report the last known position then, not (0, 0), which would read as a mouse movement."""
+    global _last_cursor
     p = POINT()
-    GetCursorPos(ctypes.byref(p))
-    return p.x, p.y
+    if GetCursorPos(ctypes.byref(p)):
+        _last_cursor = (p.x, p.y)
+    return _last_cursor
 
 
 def mouse_buttons_down() -> bool:
@@ -505,13 +500,6 @@ def place_window(hwnd: int, rect: Rect) -> None:
 
 def minimize(hwnd: int) -> None:
     ShowWindow(hwnd, SW_MINIMIZE)
-
-
-def relaunch_elevated(argv: list[str]) -> bool:
-    """Start this program again as administrator (UAC prompt). Opt-in only (--elevated)."""
-    params = subprocess.list2cmdline(argv)
-    rc = ShellExecuteW(None, "runas", sys.executable, params, os.getcwd(), 1)
-    return int(rc or 0) > 32
 
 
 class SHELLEXECUTEINFOW(ctypes.Structure):

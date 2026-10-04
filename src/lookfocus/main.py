@@ -4,7 +4,11 @@
     lookfocus watch [--zones N]          print "facing: <display>" live
     lookfocus camera-sharing             check / set up Windows' multi-app camera setting
 
-(The tray app arrives in M5.) Run from the venv: `.venv\\Scripts\\lookfocus.exe ...` or `python -m lookfocus`.
+    lookfocus run [--dry-run] [--stats]  the engine in this console
+    lookfocus [tray] [--elevated]        the tray app (what autostart runs)
+
+Run from the venv: `.venv\\Scripts\\lookfocus.exe ...` or `python -m lookfocus`. The PyInstaller build has
+LookFocus.exe (the tray app) and lookfocus-cli.exe (these commands).
 """
 
 from __future__ import annotations
@@ -214,8 +218,8 @@ def cmd_run(args) -> int:
     from lookfocus.daemon import Daemon, settings_from_config
 
     if args.elevated and not wf.we_are_elevated():
-        argv = [a for a in sys.argv[1:] if a != "--elevated"]
-        if wf.relaunch_elevated(["-m", "lookfocus", *argv]):
+        cmd = paths.app_command(*[a for a in sys.argv[1:] if a != "--elevated"], console=True)
+        if wf.start_elevated(cmd[0], cmd[1:], show=1):
             print("Relaunched as administrator in a new window.")
             return 0
         print("Elevation was cancelled or failed.")
