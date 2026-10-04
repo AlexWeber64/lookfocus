@@ -72,33 +72,24 @@ eight strips) as separate "screens".
 
 ## Get started
 
-You'll need Windows 11, a webcam in front of you (the built-in laptop camera is fine) and
-[Python 3.12](https://www.python.org/downloads/). In PowerShell, inside this folder:
+You'll need Windows 11 and a webcam in front of you (the built-in laptop camera is fine).
 
-```powershell
-py -3.12 -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements.lock
-.venv\Scripts\python.exe -m pip install --no-deps -e .
-```
+1. Download **LookFocus-1.0.0-win64.zip** from the [latest release](../../releases/latest).
+2. Unzip it anywhere you like, for example in your Documents folder.
+3. Open the `LookFocus` folder and double-click **LookFocus.exe**.
+   The first time, Windows may say *"Windows protected your PC"*, because the app isn't signed by a company.
+   Choose **More info**, then **Run anyway**.
+4. A welcome message offers to set things up. Say **Yes** and look at each dot as it appears, **the way you
+   normally would** when working there: turn your head naturally, don't just move your eyes. It takes about a
+   minute.
 
-**Two or more monitors:**
-```powershell
-.venv\Scripts\pythonw.exe -m lookfocus
-```
-A tray icon appears (look under the **^** arrow at first). It shows a red **!** because LookFocus hasn't
-met your screens yet. Right-click it and choose **Calibrate...**
+That's it: look at a screen and type. The LookFocus icon lives in the tray (it may hide under the **^** arrow
+at first). Right-click it and tick **Start with Windows** if you want it around every day.
 
-**One monitor (split into two halves):**
-```powershell
-.venv\Scripts\lookfocus.exe calibrate --zones 2
-.venv\Scripts\pythonw.exe -m lookfocus
-```
+**Only one monitor?** The welcome message offers to split it into a left and a right half that work like two
+screens. You can change this any time under **Screen zones** in the tray menu.
 
-During calibration, look at each dot **the way you normally would** when working there: turn your head
-naturally, don't just move your eyes. Then right-click the icon and tick **Start with Windows** if you want it
-around every day.
-
-Prefer a folder you can just run, without Python? See [Standalone build](docs/GUIDE.md#standalone-build).
+Developers can also [run it from source or build the exe themselves](docs/GUIDE.md#install).
 
 ## The tray icon
 
@@ -110,8 +101,8 @@ Prefer a folder you can just run, without Python? See [Standalone build](docs/GU
 | <img src="docs/media/icon-calibrating.png" width="24" alt="blue crosshair"> | Calibrating. |
 | <img src="docs/media/icon-error.png" width="24" alt="red exclamation mark"> | Needs you. Hover over it to see why (usually: calibrate). |
 
-Right-click for **Pause**, **Recalibrate**, **Choose camera**, **Debug view** (see what LookFocus sees),
-**Open config**, **Start with Windows** and **Quit**.
+Right-click for **Pause**, **Recalibrate**, **Screen zones**, **Choose camera**, **Debug view** (see what
+LookFocus sees), **Open config**, **Start with Windows** and **Quit**.
 
 ## Getting the best results
 
@@ -165,9 +156,15 @@ It waits longer while you type and never switches while you use the mouse. It on
 at another screen.
 
 **Some windows won't let it switch away. Why?**
-Windows protects programs running as administrator. LookFocus can switch *to* them but not *away* from them,
-and tells you once. If you live in admin windows, start it with
-`.venv\Scripts\pythonw.exe -m lookfocus tray --elevated`.
+Windows protects programs running as administrator (Task Manager, for example). LookFocus can switch *to* them
+but not *away* from them, and tells you once. If you live in admin windows, right-click LookFocus.exe and
+choose **Run as administrator**.
+
+**Windows or my antivirus warns about LookFocus.exe. Is it safe?**
+The app isn't signed by a company (that costs money every year), and it's packed with a common Python tool
+that antivirus programs sometimes distrust: a known false positive. Everything in it is built from this
+repository, so you can read the code, build the exe yourself, or run it from source
+([guide](docs/GUIDE.md#install)).
 
 **Does it slow my PC down?**
 On the test laptop it uses about 6-8% of the processor while it sees you, about 1% when you're away, and
@@ -177,7 +174,8 @@ nothing while paused.
 Windows 11 only. Windows 10 might work but hasn't been tested.
 
 **How do I get rid of it?**
-Untick **Start with Windows**, choose **Quit**, delete this folder and `%APPDATA%\LookFocus`.
+Untick **Start with Windows**, choose **Quit**, then delete the LookFocus folder and `%APPDATA%\LookFocus`.
+Nothing else was installed.
 
 ## Good to know
 

@@ -47,7 +47,7 @@ py -3.12 -m venv .venv
 .venv\Scripts\python.exe tools\focus_test.py --zones 2 --windows QUERY QUERY  # focus ladder test
 .venv\Scripts\python.exe -m lookfocus.camera_activity  # live per-process camera use
 
-# optional standalone build: dist\LookFocus\{LookFocus.exe, lookfocus-cli.exe}, unsigned
+# release build (the main way people get LookFocus, D-047): dist\LookFocus\ + dist\LookFocus-<v>-win64.zip, unsigned
 .venv\Scripts\python.exe -m pip install -r requirements-build.lock
 .venv\Scripts\python.exe tools\build_exe.py
 ```

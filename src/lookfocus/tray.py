@@ -175,6 +175,7 @@ class TrayApp:
         self._icons = {s: make_icon(s) for s in STATE_COLORS}
         self._uipi_warned = False
         self._cameras: tuple[float, list] = (0.0, [])
+        self._monitors: tuple[float, int] = (0.0, 1)
         self._restarts: deque[float] = deque()
         from lookfocus.sysevents import SystemEvents
 
@@ -236,19 +237,22 @@ class TrayApp:
             except ValueError as e:
                 cal = None
                 log.warning("calibration unreadable: %s", e)
-            if cal is None:
-                self._set_state("error", "not calibrated yet: choose Calibrate")
-                self.notify(
-                    "LookFocus needs a calibration",
-                    "Right-click the LookFocus tray icon and choose Calibrate. It takes about a minute.",
-                )
-                return
+            ds = build_displays(monitors.list_monitors(), self.cfg.zones)
             try:
-                ds = build_displays(monitors.list_monitors(), self.cfg.zones)
                 require_multiple(ds, self.cfg.zones)
-            except LayoutError as e:
+                one_display = False
+            except LayoutError:
+                one_display = True
+            if cal is None:
+                self._set_state("error", "not set up yet: choose Calibrate")
+                self._welcome(one_display)
+                return
+            if one_display:
                 self._set_state("error", "only one display")
-                self.notify("Only one display", f'{str(e)[:150]} Set "zones": 2 in the config (Open config).')
+                self.notify(
+                    "Only one display",
+                    "Connect your other monitor, or split this one: LookFocus menu > Screen zones.",
+                )
                 return
             missing, added = cal.check_layout(ds)
             if missing or added:
@@ -419,6 +423,7 @@ class TrayApp:
                 enabled=lambda _: not self.calibrating,
             ),
             item("Cancel calibration", lambda: self.cancel_calibration(), visible=lambda _: self.calibrating),
+            item("Screen zones", pystray.Menu(self._zone_items)),
             item("Choose camera", pystray.Menu(self._camera_items)),
             item("Camera sharing...", lambda: self._run(self.camera_sharing_dialog)),
             item("Open config", lambda: self.open_config()),
@@ -474,7 +479,85 @@ class TrayApp:
                 radio=True,
             )
 
+    def _monitor_count(self) -> int:
+        from lookfocus import monitors
+
+        t, n = self._monitors
+        if time.monotonic() - t > 5:
+            try:
+                n = len(monitors.list_monitors())
+            except Exception:
+                log.exception("monitor enumeration failed")
+            self._monitors = (time.monotonic(), n)
+        return n
+
+    def _zone_items(self):
+        several = self._monitor_count() >= 2
+        yield pystray.MenuItem(
+            "Off: one per monitor",
+            functools.partial(self._zones_clicked, 0),
+            checked=lambda _: self.cfg.zones == 0,
+            radio=True,
+            enabled=several,  # with one monitor, "off" leaves nothing to switch between
+        )
+        for n in (2, 3, 4):
+            yield pystray.MenuItem(
+                f"Split {'the main' if several else 'this'} monitor in {n}",
+                functools.partial(self._zones_clicked, n),
+                checked=lambda _, n=n: self.cfg.zones == n,
+                radio=True,
+            )
+
     # --- actions -------------------------------------------------------------------------------
+    def _zones_clicked(self, n, _icon=None, _item=None) -> None:
+        self.set_zones(n)
+
+    def set_zones(self, n: int) -> None:
+        """Change the zone count and recalibrate right away: the old calibration can't fit new zones.
+        The engine isn't restarted separately; calibration stops it and starts it again afterwards."""
+        if n == self.cfg.zones or self.calibrating:
+            return
+        self.cfg = replace(self.cfg, zones=n)
+        K.save(self.cfg, self.cfg_path)
+        self._cfg_mtime = self._mtime()
+        log.info("screen zones set to %d from the menu", n)
+        self.start_calibration()
+
+    def _welcome(self, one_display: bool) -> None:
+        """First run (no calibration yet): offer to set up, once. Later starts just say what's missing."""
+        st = self._load_state()
+        if st.get("welcomed"):
+            how = "choose Screen zones" if one_display else "choose Calibrate"
+            self.notify("LookFocus isn't set up yet", f"Right-click the LookFocus tray icon and {how}.")
+            return
+        st["welcomed"] = True
+        self._save_state(st)
+        self._run(lambda: self._welcome_dialog(one_display))
+
+    def _welcome_dialog(self, one_display: bool) -> None:
+        if one_display:
+            text = (
+                "Welcome to LookFocus.\n\nYou have one monitor. LookFocus can split it into a left and a "
+                "right half that work like two screens: look at a half and type, and the window you last "
+                "used there gets the keyboard.\n\nFirst it needs to learn how you look at each half: a dot "
+                "appears, you look at it the way you normally would. It takes about a minute.\n\n"
+                "Split the screen and start now?"
+            )
+        else:
+            text = (
+                "Welcome to LookFocus.\n\nFirst it needs to learn how you look at each of your screens: "
+                "a dot appears on each one, you look at it the way you normally would. It takes about a "
+                "minute.\n\nStart now?"
+            )
+        if message_box(text, MB_YESNO | MB_ICONINFO) != IDYES:
+            how = "Screen zones" if one_display else "Calibrate"
+            self.notify("Set up later", f"Right-click the LookFocus tray icon and choose {how} when ready.")
+            return
+        if one_display:
+            self.set_zones(2)
+        else:
+            self.start_calibration()
+
     def _camera_clicked(self, cam, _icon=None, _item=None) -> None:
         self.choose_camera(cam)
 
@@ -605,11 +688,14 @@ class TrayApp:
                     "Calibration saved, with a warning", problems[0][:200] + ". Consider recalibrating."
                 )
             else:
-                self.notify("Calibration saved", "All displays can be told apart. LookFocus is running.")
+                tip = "" if autostart.is_enabled() else " Tip: tick Start with Windows in the menu."
+                self.notify(
+                    "Calibration saved", "All displays can be told apart. LookFocus is running." + tip
+                )
         except Cancelled:
             self.notify("Calibration cancelled", "Nothing was changed.")
-        except LayoutError as e:
-            self.notify("Can't calibrate", f'{str(e)[:150]} Set "zones": 2 in the config (Open config).')
+        except LayoutError:
+            self.notify("Can't calibrate", "Only one display: split it with LookFocus menu > Screen zones.")
         except (TimeoutError, RuntimeError) as e:
             self.notify("Calibration failed", str(e)[:250])
         except Exception as e:
@@ -632,6 +718,10 @@ class TrayApp:
         except (OSError, ValueError):
             return {}
 
+    def _save_state(self, st: dict) -> None:
+        with contextlib.suppress(OSError):
+            self.state_path.write_text(json.dumps(st), encoding="utf-8")
+
     def _maybe_prompt_sharing(self, info: dict) -> None:
         """Once (first time the setting reads OFF on a build that has it), offer to open the setting."""
         if info.get("state") != "off" or not info.get("available"):
@@ -640,8 +730,7 @@ class TrayApp:
         if st.get("sharing_prompted"):
             return
         st["sharing_prompted"] = True
-        with contextlib.suppress(OSError):
-            self.state_path.write_text(json.dumps(st), encoding="utf-8")
+        self._save_state(st)
         self._run(self.camera_sharing_dialog)
 
     def camera_sharing_dialog(self) -> None:

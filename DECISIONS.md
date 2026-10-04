@@ -888,3 +888,43 @@ The spec's M6 README topics are therefore split between the two files.
 - **`make_icon` now scales its glyphs** (designed on a 64 px grid). They used to be fixed pixel sizes, so the
   256 px standalone-exe icon and the video's exported icons had a tiny eye in a big disc. A test checks that the
   glyph's share of the icon is the same at 64 and 256 px. `docs/media/icon-*.png` are exported from it.
+
+### D-047 Release packaging: the zipped exe folder is the main way to get LookFocus; guided first run **[user choice; verified]**
+The user asked for an easy exe for people to run, with the Python setup as the secondary route. Options were
+put to the user, who chose the **zip of the one-folder build** (and the guided first run below):
+- **Rejected: one-file exe.** It unpacks ~225 MB to %TEMP% on every launch: every sign-in, and again for every
+  camera-sharing probe child (D-043), because a onefile app that re-runs itself unpacks again. It's flagged
+  by antivirus more often, and leaves its unpacked files behind when killed.
+- **Rejected: installer.** The spec ruled installers out, and it would need Inno Setup at build time.
+
+The zip:
+- `tools/build_exe.py` now produces `dist\LookFocus-<version>-win64.zip` (**95 MB**) of `LookFocus\`, made
+  only if every check passes.
+- Version info is on both exes: Properties shows LookFocus 1.0.0.
+- `README.txt` is a plain-text quick start, from `packaging/README.txt`.
+- `third-party-licenses\` holds the license files of every distribution that actually got bundled. The spec
+  writes the bundled top-level packages to `build/bundled-top-level.txt`, and the build maps them to
+  distributions: 15, plus Python and PyInstaller's bootloader. flatbuffers ships no license file; the index
+  notes it.
+- **pystray is LGPL-3.0**, so it's collected as plain `.py` files (`module_collection_mode`) rather than inside
+  the exe's archive, which keeps it replaceable. A build check enforces this.
+
+Guided first run (tray), so nobody needs a terminal or has to edit `config.json`:
+- **Welcome dialog, shown once** (`state.json` "welcomed") when there's no calibration. On a single monitor
+  with zones 0, it offers to split the screen in two and calibrate. Otherwise it offers to calibrate. "No"
+  leaves everything as it was, with a notification pointing at the menu. Later starts only notify.
+- **Tray "Screen zones" submenu:** Off (only with ≥2 monitors), or split the main monitor in 2, 3 or 4.
+  Changing it saves the config and starts calibration right away, because the old calibration can't match
+  new zone ids. The engine isn't restarted separately; calibration stops and restarts it.
+- Messages that used to say "set zones in config" now point at the menu. The first "Calibration saved"
+  notification suggests Start with Windows.
+- Admin windows with the exe: right-click → Run as administrator; no flag needed.
+
+Verified:
+- 4 unit tests (yes and no answers, shown once, zone change triggers recalibration, no-op cases).
+- A **fresh-install run of the real app**, with `%APPDATA%` pointed at a sandbox, both from source and with
+  the built `LookFocus.exe`: the welcome dialog appeared 0.8 s after launch with the one-monitor text (read
+  back from the dialog's controls), a scripted "No" closed it, the config stayed at zones 0, `welcomed` was
+  recorded and the "Set up later" notification was logged.
+- The "Yes" path (zones 2, then the calibration overlay) is unit-tested; it hasn't been run against the real
+  overlay by the agent, and is left to the user's hardware check.
