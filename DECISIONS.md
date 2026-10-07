@@ -948,3 +948,19 @@ to public.
   it from the project's generic package registry instead of uploading it as an attachment.
 - **Pending the user's license choice:** LICENSE file, rebuilt zip (LICENSE included), tag and release
   v1.0.0, then the switch to public.
+
+### D-049 GPL-3.0 and v1.0.0 published **[live, verified anonymously]**
+- **License: GPL-3.0-only** (the user's choice of GPL-3.0; "only" is the literal reading). Canonical text from
+  gnu.org (SHA-256 `3972dc97...6986`) as `LICENSE`; `license = "GPL-3.0-only"` and `license-files` in
+  pyproject (PEP 639, setuptools 84); a License section in the README; `LICENSE.txt` in the release zip
+  (a build check enforces it). GPL-3.0 is compatible with the bundled Apache-2.0 libraries (mediapipe,
+  OpenCV); GPL-2.0-only would not have been. GitLab's heuristic labels the text "v3.0 or later"; the
+  declaration in README and pyproject is what counts.
+- **Order:** license committed before the project became public, so the code was never public without one.
+- **Release v1.0.0:** annotated tag on the license commit.
+  - `LookFocus-1.0.0-win64.zip` (100,740,311 bytes, SHA-256 `896a1750...1b58`, Defender: no threats) and a
+    `.sha256` file in the generic package registry.
+  - Release links with direct asset paths `/LookFocus-win64.zip` and `/LookFocus-win64.zip.sha256`, so
+    `-/releases/permalink/latest/downloads/LookFocus-win64.zip` always serves the newest zip.
+- **Public:** project visibility switched to public afterwards. Checked without logging in: project page,
+  README, demo mp4, release page, checksum and the full zip download (exact size and hash) all return 200.
