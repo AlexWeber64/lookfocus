@@ -4,6 +4,8 @@ LookFocus {version}
 Look at a monitor and just type. LookFocus notices which screen you're facing (through your webcam) and
 puts your keyboard there. It runs in the Windows tray and never goes online.
 
+Project page, source code and updates: https://gitlab.com/AlexWeber64/lookfocus
+
 
 START
 -----

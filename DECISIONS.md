@@ -5,7 +5,7 @@ Status markers: **[verified]** = checked on the dev machine; **[unverified]** = 
 
 ---
 
-## M0 — environment probe (2026-09-30)
+## M0: environment probe (2026-09-30)
 
 Dev machine: Windows 11 Pro 10.0.26200, AMD64, one camera ("Intel(R) LNL AVStream Camera", reported to
 apps as "Integrated Camera"; Lunar Lake IPU/MIPI sensor). Python on the machine: 3.14.7 (default), 3.12.10,
@@ -25,7 +25,7 @@ apps as "Integrated Camera"; Lunar Lake IPU/MIPI sensor). Python on the machine:
   (`pip freeze --exclude-editable`). Build backend pinned (`setuptools==84.0.0`).
 - If uv is wanted later: `uv venv -p 3.12 && uv pip sync requirements.lock` works on the same lock.
 
-### D-003 mediapipe **0.10.33**, not the latest 1.0.1 — telemetry **[verified]**
+### D-003 mediapipe **0.10.33**, not the latest 1.0.1 (telemetry) **[verified]**
 The biggest M0 finding. **mediapipe >= 0.10.35 sends usage telemetry to Google at runtime**, which breaks the
 "no network at runtime" invariant.
 - Google's MediaPipe Tasks privacy notice (last modified 2026-06-05): *"MediaPipe Tasks APIs send metrics about
@@ -87,7 +87,7 @@ The biggest M0 finding. **mediapipe >= 0.10.35 sends usage telemetry to Google a
 | msmf:0 | open, then `set()` ×3 | 0.46 s | 0.36 s | set() cost 0.03 s total |
 | dshow:0 | open params | 1.05 s | 0.06 s | 30.0 fps, YUY2 |
 | dshow:0 | open, then `set()` ×3 | 0.78 s | 0.06 s | **set() cost 2.18 s** (height 1.13 s, fps 1.05 s) |
-| dshow:1 (OBS Virtual Camera) | any | fail | — | OBS not running; expected |
+| dshow:1 (OBS Virtual Camera) | any | fail | n/a | OBS not running; expected |
 
 - Both backends work on this camera and open in about 1 s. MSMF is the default because it is the modern
   path, it is the only one that sees Frame Server–shared cameras, and the DSHOW crash reports mentioned in the
@@ -180,7 +180,7 @@ cam_share_test replaces it.
   == 0` means in use) is a plausible signal. It's keyed by executable path, and whether a *blocked* app
   registers there is **[unverified]**. It's not in the spec, so it isn't built.
 
-## M1 — head pose and the debug viewer
+## M1: head pose and the debug viewer
 
 ### D-012 Reading fresh frames: drain the backend's buffer **[verified]**
 Timing successive reads after a pause shows buffered frames: MSMF returns ~2 frames instantly (2–3 ms) and
@@ -309,14 +309,14 @@ From the user's guided check (median per position, sd at centre):
   doesn't matter because calibration records whatever each monitor produces.
 - → default `pose_source = "matrix"`; `lm3d` stays selectable in config as a fallback.
 
-### D-017 CPU with a face tracked: 8.8% of the machine at 15 fps — must come down (M4) **[measured]**
+### D-017 CPU with a face tracked: 8.8% of the machine at 15 fps, must come down (M4) **[measured]**
 Headless capture thread, face tracked for 20 s: **70.5% of one core = 8.8% of 8 CPUs**, inference median
 24.6 ms (p90 28.9 ms) versus 2–4 ms detection-only with no face. That misses "well under 10%". Profiling
 without a face showed a ~3 ms `mp.Image` construction cost, ~0.8 ms `cvtColor`, and MSMF's 30 fps software
 colour conversion (11–17% of a core). Options to measure in M4 with a face present: process at 10–12 fps
 (a 300 ms dwell still gets 3–4 samples), cheaper DSHOW reads, and cutting per-frame copies.
 
-## M2 — calibration and classifier
+## M2: calibration and classifier
 
 ### D-018 Logical displays and monitor identity **[verified on one monitor; multi-monitor untested]**
 - `displays.build_displays()` (pure) turns monitors into logical displays ordered left to right.
@@ -464,7 +464,7 @@ of the run was still in flight and the state was UNKNOWN, which was treated as O
   the shell's camera preview or privacy UI). It simply joins the blockers while yielded. Display names:
   WindowsCamera → "Windows Camera", explorer → "Windows Explorer".
 
-## M3 — focus switching
+## M3: focus switching
 
 ### D-027 Target selection **[unit-tested; tracker wired in M4]**
 - `targeting.choose_target` (pure): the window last active on the display (remembered by
@@ -556,7 +556,7 @@ All runs console-less (like the daemon) unless noted; 24 switches each; zone mod
 | Calculator ↔ Settings (UWP) | normal | 24/24, keyboard 24/24 | **SetForegroundWindow 23/24** (0–78 ms); one switch needed the **unassigned-VK tap** after AttachThreadInput also failed |
 | Calculator ↔ Settings (UWP) | elevated | 24/24 | SetForegroundWindow 24/24 |
 | admin PowerShell ↔ Explorer (from an admin console) | elevated | 23/23 twice | AttachThreadInput 11/11 into the admin window |
-| Terminal ↔ Firefox / Explorer (in-terminal, biased, D-029) | normal | 46/46 | — |
+| Terminal ↔ Firefox / Explorer (in-terminal, biased, D-029) | normal | 46/46 | n/a |
 | **admin PowerShell ↔ Explorer** | **normal** | into admin: works (SetForegroundWindow 52 ms); **away from admin: 0/3, every stage fails** | UIPI |
 
 - **UIPI in practice:** a non-elevated LookFocus *can* move focus **into** an elevated window but can't take
@@ -572,7 +572,7 @@ All runs console-less (like the daemon) unless noted; 24 switches each; zone mod
 - No menu-bar activation or other side effects were reported; the Alt stage was never reached in a
   successful run.
 
-## M4 — the engine
+## M4: the engine
 
 ### D-031 CPU: the camera was sending 2560×1440; raw NV12 fast path **[verified]**
 - First full-engine measurement (dry run, face tracked 367/367 frames, 15 fps): **10.1% of the machine**
@@ -656,7 +656,7 @@ in 0–1 ms after the first (full-ladder) switch; Firefox via set_foreground, si
 (console bias, D-029). The tray app runs console-less, so its learner will see the daemon-faithful picture.
 "Everything worked well."
 
-## M5 — tray, hotkey, autostart, lock/sleep, config, logs
+## M5: tray, hotkey, autostart, lock/sleep, config, logs
 
 ### D-036 Tray app **[scripted end-to-end run: 14/14 checks; real launch verified]**
 `tray.TrayApp`: pystray icon (main thread) around the M4 `Daemon`. States (drawn icons, no assets):
@@ -729,7 +729,7 @@ Paused = no switching **and the camera released** (LED off).
 M5 hardware result (user): tray, hotkey, lock/unlock, sleep and display off, autostart, tray recalibration,
 debug view, camera menus, live config edits and quit all checked: "Everything looks great!"
 
-## M6 — hardening, README, optional standalone build
+## M6: hardening, README, optional standalone build
 
 ### D-040 Hardening: failures are logged, contained and visible **[5 tests + soak run]**
 A review of what could fail silently under `pythonw` (no console, `sys.stderr` is None):
