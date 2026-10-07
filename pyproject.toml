@@ -6,6 +6,8 @@ build-backend = "setuptools.build_meta"
 name = "lookfocus"
 version = "1.0.0"
 description = "Windows tray app: move keyboard focus to the monitor you are facing, using the webcam."
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
 requires-python = "==3.12.*"
 # Direct dependencies, pinned exactly. Full transitive pins live in requirements.lock.
 # mediapipe is deliberately held at 0.10.33: 0.10.35 and later bundle a telemetry uploader

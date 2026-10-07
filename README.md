@@ -190,6 +190,13 @@ The full list, with details, is in the [guide](docs/GUIDE.md#known-limitations).
   developer notes.
 - **[DECISIONS.md](DECISIONS.md)**: why it works the way it does, with the measurements behind each choice.
 
+## License
+
+LookFocus is free software, licensed under the [GNU General Public License v3.0](LICENSE). You may use, study,
+share and change it; if you distribute a modified version, it has to stay under the same license with its
+source code available. The libraries bundled with the download keep their own licenses (listed in its
+`third-party-licenses` folder).
+
 ## Credits
 
 The idea comes from [Glance Switch](https://glanceswitch.com/), which does this on macOS. LookFocus is an

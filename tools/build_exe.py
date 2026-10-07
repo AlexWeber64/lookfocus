@@ -129,7 +129,7 @@ def collect_licenses(dist_dir: Path) -> list[str]:
 
 def check(dist: Path) -> list[str]:
     problems = []
-    for name in ("LookFocus.exe", "lookfocus-cli.exe", "README.txt"):
+    for name in ("LookFocus.exe", "lookfocus-cli.exe", "README.txt", "LICENSE.txt"):
         if not (dist / name).exists():
             problems.append(f"missing {name}")
     internal = dist / "_internal"
@@ -170,6 +170,7 @@ def main() -> int:
         return rc
     readme = (ROOT / "packaging" / "README.txt").read_text(encoding="utf-8").format(version=VERSION)
     (DIST / "README.txt").write_text(readme, encoding="utf-8")
+    shutil.copyfile(ROOT / "LICENSE", DIST / "LICENSE.txt")  # GPL-3.0: the license travels with the binary
     rows = collect_licenses(DIST)
     print(f"third-party licenses: {len(rows)} entries")
     problems = check(DIST)

@@ -51,4 +51,7 @@ UNINSTALL
 2. Delete this folder and %APPDATA%\LookFocus.
 
 
-Third-party software notices are in the third-party-licenses folder.
+LICENSE
+-------
+LookFocus is free software under the GNU General Public License v3.0 (LICENSE.txt). Its source code is at
+https://gitlab.com/AlexWeber64/lookfocus. Third-party software notices are in the third-party-licenses folder.
