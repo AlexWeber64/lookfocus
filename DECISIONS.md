@@ -928,3 +928,23 @@ Verified:
   recorded and the "Set up later" notification was logged.
 - The "Yes" path (zones 2, then the calibration overlay) is unit-tested; it hasn't been run against the real
   overlay by the agent, and is left to the user's hardware check.
+
+### D-048 Publishing on GitLab, private first **[done: project created, main pushed]**
+The user's GitHub account is unusable (shadowbanned by a GitHub bug), so LookFocus lives at
+`gitlab.com/AlexWeber64/lookfocus`. It was created **private** so the user can review it before switching it
+to public.
+- **Author email:** at the user's request, all commits were rewritten (before the first push, nothing
+  published) from the university address to GitLab's no-reply address, using `git filter-branch` on
+  author/committer email only, so dates and messages are unchanged. A full pre-rewrite `git bundle` was kept
+  outside the repo. This repo's `user.email` is now the no-reply address.
+- **README on GitLab:** GitLab turns a markdown image link to an `.mp4` into an inline video player, so the
+  README embeds the real video (with sound; frame 0 is the baked poster, D-046) instead of the GIF. Verified
+  through GitLab's markdown API against the project: one `<video controls preload="metadata">`, `align`
+  attributes kept, all images resolving. The download links use GitLab's
+  `-/releases/permalink/latest`. The GIF stays in `docs/media/` for sharing.
+- **Credits:** the README names Glance Switch as the inspiration and states that LookFocus is an independent
+  implementation, not affiliated with it. No text or assets were taken from it (spec rule).
+- **Release binaries:** the zip (~95 MB) is close to GitLab.com's 100 MB attachment limit, so releases link
+  it from the project's generic package registry instead of uploading it as an attachment.
+- **Pending the user's license choice:** LICENSE file, rebuilt zip (LICENSE included), tag and release
+  v1.0.0, then the switch to public.
