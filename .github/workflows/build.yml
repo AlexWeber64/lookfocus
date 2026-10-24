@@ -1,0 +1,73 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - name: Install dependencies
+        run: |
+          python -m pip install -r requirements.lock
+          python -m pip install --no-deps -e .
+      - name: Lint
+        run: |
+          python -m ruff check .
+          python -m ruff format --check .
+      - name: Test
+        run: python -m pytest
+
+  build:
+    needs: test
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.lock
+            requirements-build.lock
+      - name: Install dependencies
+        run: |
+          python -m pip install -r requirements.lock
+          python -m pip install -r requirements-build.lock
+          python -m pip install --no-deps -e .
+      # tools/build_exe.py runs the privacy checks, the model hash check, and the exe's own --self-check.
+      # It makes no zip unless every check passes.
+      - name: Build exe
+        run: python tools/build_exe.py
+      - name: Write checksum
+        run: |
+          $zip = Get-ChildItem dist -Filter "LookFocus-*-win64.zip" | Select-Object -First 1
+          $hash = (Get-FileHash $zip.FullName -Algorithm SHA256).Hash.ToLower()
+          Set-Content -Path "$($zip.FullName).sha256" -Value "$hash  $($zip.Name)" -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LookFocus-unsigned
+          path: |
+            dist/LookFocus-*-win64.zip
+            dist/LookFocus-*-win64.zip.sha256
+          if-no-files-found: error
+          retention-days: 30
