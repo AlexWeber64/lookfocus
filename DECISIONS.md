@@ -983,6 +983,11 @@ with libcamera 0.7.2. Same repository folder as the Windows machine (dual boot),
   capture's backend table and sharing state, the debug view's window (`CvWindow` vs a Qt window), the tray's
   icon factory, autostart label and backend lookups, and config's camera backends (`pipewire`, `v4l2` on
   Linux; the default is the platform's first).
+- **CI:** a `test (Linux)` job (ubuntu-24.04) runs ruff and pytest from `requirements-linux.lock` next to the
+  Windows test and build jobs. The tests need no KWin, camera or display; the job installs only the system
+  libraries that importing PySide6 and OpenCV loads (EGL/GL, xkbcommon, fontconfig, glib, dbus) and libcurl
+  for the ELF privacy check's positive control. Branch renamed `linux` -> `linux-support` (a feature branch
+  to merge into `main`, not a per-OS branch).
 - **Not available on Linux:** `move_cursor_on_switch` (Wayland lets no client, not even a KWin script, warp
   the pointer: logged once and ignored), the Alt-tap ladder and `--elevated` (no foreground lock and no
   UIPI-style barrier on Wayland), the camera-sharing check (PipeWire shares cameras, D-053).
