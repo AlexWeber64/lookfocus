@@ -5,11 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "lookfocus"
 version = "1.0.0"
-description = "Windows tray app: move keyboard focus to the monitor you are facing, using the webcam."
+description = "Tray app for Windows and KDE Plasma (Linux): move keyboard focus to the monitor you are facing, using the webcam."
 license = "GPL-3.0-only"
 license-files = ["LICENSE"]
 requires-python = "==3.12.*"
-# Direct dependencies, pinned exactly. Full transitive pins live in requirements.lock.
+# Direct dependencies, pinned exactly. Full transitive pins live in requirements.lock (Windows) and
+# requirements-linux.lock (Linux).
 # mediapipe is deliberately held at 0.10.33: 0.10.35 and later bundle a telemetry uploader
 # (see DECISIONS.md, D-003). Do not bump without re-running tools/net_audit.py.
 # opencv-contrib-python (not opencv-python): mediapipe depends on the contrib build, and
@@ -20,6 +21,10 @@ dependencies = [
     "numpy==2.5.3",
     "pystray==0.19.5",
     "Pillow==12.3.0",
+    # Linux (KDE Plasma, Wayland) only, D-050: DBus to KWin / logind (pure Python) and Qt for the tray,
+    # overlay and dialogs. Only QtCore / QtGui / QtWidgets are imported (never QtNetwork).
+    "jeepney==0.9.0; sys_platform == 'linux'",
+    "PySide6-Essentials==6.12.0; sys_platform == 'linux'",
 ]
 
 [project.scripts]

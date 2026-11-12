@@ -23,7 +23,11 @@ a = Analysis(  # noqa: F821
     # Not used by LookFocus. matplotlib must stay: mediapipe's vision package imports its drawing utils,
     # which import matplotlib.pyplot (measured: excluding it broke the face tracker). sounddevice is
     # imported inside a try/except by mediapipe's audio helpers only.
-    excludes=["sounddevice", "tkinter", "pytest", "IPython", "jax", "torch", "tensorflow"],
+    # lookfocus.linux (and its PySide6 / jeepney) is the Linux backend: never part of the Windows build.
+    excludes=[
+        "sounddevice", "tkinter", "pytest", "IPython", "jax", "torch", "tensorflow",
+        "lookfocus.linux", "PySide6", "shiboken6", "jeepney",
+    ],
     # pystray is LGPL-3.0: ship it as plain .py files in _internal\pystray (not inside the exe's archive),
     # so users can replace it with a modified version, as the LGPL asks of bundled libraries.
     module_collection_mode={"pystray": "py"},

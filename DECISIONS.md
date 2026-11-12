@@ -964,3 +964,122 @@ to public.
     `-/releases/permalink/latest/downloads/LookFocus-win64.zip` always serves the newest zip.
 - **Public:** project visibility switched to public afterwards. Checked without logging in: project page,
   README, demo mp4, release page, checksum and the full zip download (exact size and hash) all return 200.
+
+## Linux port: KDE Plasma on Wayland (2026-11-12, branch `linux`)
+
+Dev machine for the port: Fedora 45, KDE Plasma 6.8.2 (KWin 6.8.2) on Wayland, one built-in 2880x1800
+panel at 1.75x scale (1646x1029 logical), camera: Sony IMX471 behind an Intel IPU7 (MIPI), PipeWire 1.6.11
+with libcamera 0.7.2. Same repository folder as the Windows machine (dual boot), so the Linux venv is
+`.venv-linux/` next to the Windows `.venv/`.
+
+### D-050 Scope and structure **[user choice: KDE Plasma Wayland only, separate branch; 376 tests pass on Linux]**
+- **Target:** KDE Plasma 6 on Wayland only (the user's choice). GNOME would need a Shell extension to
+  activate windows, and X11 sessions are a shrinking audience; neither is attempted.
+- **Structure:** the pure modules are shared unchanged. The Win32 modules keep their names and behaviour;
+  their Linux counterparts live in `src/lookfocus/linux/` with the same public functions, and
+  `backend.py` picks one set with lazy imports, so no platform code loads at import time.
+  Shared modules changed only where they called Win32 directly: the daemon's foreground seeding
+  (`windows_focus.foreground_window()` added), the input tracker's slack (a constructor argument),
+  capture's backend table and sharing state, the debug view's window (`CvWindow` vs a Qt window), the tray's
+  icon factory, autostart label and backend lookups, and config's camera backends (`pipewire`, `v4l2` on
+  Linux; the default is the platform's first).
+- **Not available on Linux:** `move_cursor_on_switch` (Wayland lets no client, not even a KWin script, warp
+  the pointer: logged once and ignored), the Alt-tap ladder and `--elevated` (no foreground lock and no
+  UIPI-style barrier on Wayland), the camera-sharing check (PipeWire shares cameras, D-053).
+- **Display off** is detected through `org_kde_kwin_dpms` (per-output power mode). A first reading of
+  "off" for a screen that looked on was the session actually being locked with the panel off
+  (`LockedHint=yes`, ScreenSaver active for 518 s): the protocol is right, the reading was during the lock.
+
+### D-051 Windows and focus through a KWin script **[verified live: activation 2-6 ms, verified by KWin]**
+- On Wayland no ordinary client can list windows, see the active one, read the pointer or activate a
+  window. A KWin script can, and KWin loads scripts over DBus (`org.kde.kwin.Scripting.loadScript`). So
+  `linux/kwin.py` writes one, loads it and serves it over the session bus:
+  - script to LookFocus: `Event(kind, json)` calls for window activation, pointer moves (throttled to one
+    per 30 ms), screen and desktop changes, the shortcut, and command replies;
+  - LookFocus to script: the script keeps one `Next()` call pending and LookFocus answers it with a batch
+    of commands (`windows`, `screens`, `activate`, `cursor`). KWin's `callDBus` is asynchronous, so the
+    compositor never waits on LookFocus; an idle `Next()` is answered with an empty batch every 10 s.
+- Measured: the script runs ~8 ms after `loadScript`; a command round trip takes ~1.9 ms; activating Dolphin
+  and back took 2.4 ms and 5.6 ms, each verified by KWin's active window afterwards. KWin 6.8 has
+  `workspace.cursorPosChanged`, `stackingOrder`, `screenOrder` and per-window `internalId` (checked with a
+  probe script before relying on them).
+- Each process's script is named after its pid and addressed to its unique bus name, so the tray and a
+  `lookfocus watch` coexist. Scripts of processes that died without unloading are unloaded at the next start
+  (verified: after a SIGKILL the script stayed loaded; the next start logged "unloaded a stale KWin script"
+  and `isScriptLoaded` turned false).
+- The pause shortcut is registered by the tray's script (`registerShortcut`), so pressing it is KDE's global
+  shortcut system calling LookFocus, not a key hook. Verified by invoking it through kglobalaccel: paused
+  (camera released), invoked again: resumed. KDE remembers a registered shortcut's key, so the `hotkey`
+  setting only sets the first one; the tray points to System Settings when it changes.
+- Eligible windows mirror the Win32 Alt-Tab filter: managed, normal or dialog, not `skipSwitcher` (that
+  drops e.g. xwaylandvideobridge), not a transient (its main window is targeted and the script activates
+  its modal dialog instead, like `GetLastActivePopup`), on the current desktop and activity, not ours.
+  Window ids are KWin's `internalId` strings in place of HWNDs. Geometry is KWin's logical pixels, the same
+  space as the screens, so no DPI handling is needed.
+
+### D-052 Input activity: Wayland idle-notify plus KWin's pointer **[verified: idle events live; tracker tests]**
+- KDE answers `GetSessionIdleTime` with NotSupported on Wayland (measured). `ext_idle_notifier_v1` v2
+  (`get_input_idle_notification`, which ignores video players' idle inhibitors) gives "idled" after a
+  timeout without input and "resumed" on the next input: *that* input happened, never what. A 40 ms
+  timeout gave the first "idled" 43 ms after start. `linux/wayland.py` speaks the Wayland wire protocol
+  directly (pure Python, ~200 lines) rather than adding a libwayland binding.
+- The last input time is exact at both events; during continuous input faster than the timeout it stays at
+  the start of the burst, which the 2 s typing grace covers.
+- The idle "resumed" event and KWin's cursor event for the same pointer movement arrive over two sockets in
+  either order, so a new input is handed to the tracker only once it's 20 ms old; and because cursor events
+  are throttled, input within 150 ms of the last seen pointer change counts as mouse (Windows: 60 ms).
+- Mouse buttons aren't observable without reading `/dev/input`, which would be a keylogger-grade permission
+  and breaks the privacy invariant. A click without pointer movement therefore reads as typing: it only
+  lengthens the next dwell, the same trade-off as wheel scrolling on Windows.
+
+### D-053 Camera through PipeWire and GStreamer **[verified live: 640x480 at 15 fps; no-face mode 1.5% CPU]**
+- On this laptop the `/dev/video*` nodes are raw IPU7 ISYS nodes: only libcamera, which runs the ISP behind
+  PipeWire, produces images. PipeWire is also how Plasma and the browsers reach cameras, and it hands one
+  camera to several apps, so LookFocus never needs to yield to a video call (`sharing` reads "on"; the
+  Windows yield policy is untouched and simply never triggers).
+- OpenCV's pip wheels have neither PipeWire nor GStreamer support, so frames come from a `gst-launch-1.0`
+  child (`pipewiresrc ! videorate ! framerate=15/1 ! videoconvert ! videoscale ! BGR`) through a pipe, in
+  memory only. A two-line shell supervisor kills the pipeline when LookFocus's end of its stdin closes, so the
+  camera can't outlive LookFocus (verified: SIGKILL of LookFocus, pipeline gone within 1.5 s). `GstCapture` mimics the five `cv2.VideoCapture` methods `CameraSource`
+  uses, so selection, verification, freshness and reopen logic are shared.
+- The camera delivers ~56 fps; `videorate max-rate=15` didn't limit variable-rate PipeWire caps (275 frames in
+  5 s) but a `framerate=15/1` caps filter did (measured 15.7 fps).
+- Cameras come from `pw-dump`: `Video/Source` nodes with the Camera role or a libcamera/v4l2 device (screen
+  casts are skipped), identified by the stable node name. The sensor reports `api.libcamera.rotation: 180`;
+  the pipeline can flip for it, and whether frames need that is checked with a face in view (D-055).
+- `v4l2` (OpenCV's V4L2 backend) stays as the fallback for USB webcams without PipeWire; it has no
+  other-app detection.
+
+### D-054 UI: Qt (PySide6-Essentials) **[verified live: tray registered, overlay and debug view drawn]**
+- Plasma is Qt; `QSystemTrayIcon` publishes a StatusNotifierItem (checked on DBus: title, six icon sizes,
+  menu) and notifications go to Plasma's notification centre. pystray's Linux backends need GTK,
+  AppIndicator or an X11 tray, so pystray provides only its `Menu`/`MenuItem` objects (the `dummy` backend)
+  and `linux/tray.py` renders that menu into a QMenu on each open. `TrayApp`'s logic is shared; its first-run
+  and watchdog tests now run on Linux too.
+- The overlay can't be positioned on Wayland, so it goes full screen on the monitor holding the display and
+  dims the rest of the monitor in zone mode (screenshot checked, then deleted). KWin's focus-stealing
+  prevention may leave a background app's new window unfocused, so the overlay activates itself through the
+  bridge (verified: it was the active window), so Esc works.
+- The debug view draws its canvas into a QLabel instead of HighGUI, which in the pip wheels is a bundled Qt 5
+  over X11 (a second Qt in the process, plus XWayland).
+- Qt widgets must live on the main thread; `qt.call_in_main` marshals calls from the calibration and
+  debug-view threads, as each owned its own Win32 window before.
+- Only QtCore, QtGui and QtWidgets are imported; a test checks that QtNetwork is never loaded.
+- Verified through the same DBus calls Plasma makes: the menu layout (status line, Pause, Recalibrate,
+  Screen zones with radio states, Choose camera listing the PipeWire camera, Start at login, Quit), and
+  clicking Start at login (wrote, then removed the autostart entry), Debug view / Close debug view, and Quit
+  (exit code 0, no camera pipeline or script file left).
+
+### D-055 Privacy on Linux **[verified: ELF check, network audit clean, positive controls]**
+- The startup check now reads ELF too: on Linux every library links libc (which has `socket`), so it
+  inspects the *undefined dynamic symbols* (`socket`, `connect`, `getaddrinfo`, `sendto`, curl, TLS) and
+  `DT_NEEDED` libraries instead of a DLL list. The pinned mediapipe 0.10.33 `libmediapipe.so` imports none
+  of them; `libcurl.so.4` (positive control) is flagged.
+- `tools/net_audit.py` runs on Linux (`tools/_netlinux.py` matches `/proc/net/{tcp,udp}[6]` to the process's
+  socket fds): 15 s of inference plus 5 s tail, 1,326 polls, no connections. A local TCP and UDP socket
+  (positive control) were all seen.
+- DBus and Wayland are local Unix sockets. The KWin script is plain text in `$XDG_RUNTIME_DIR/lookfocus/`;
+  frames never touch disk (screenshots taken during testing showed only the overlay, or the debug view with
+  video off, and were deleted).
+- **Open:** the end-to-end check with a face (calibration, switching, and whether the 180-degree sensor needs
+  the flip) needs the user at the camera.

@@ -5,6 +5,7 @@ troubleshooting, the standalone build and developer notes. `DECISIONS.md` record
 the measurements behind it.
 
 - [Install](#install)
+- [Linux (KDE Plasma)](#linux-kde-plasma)
 - [Calibration](#calibration)
 - [When it switches](#when-it-switches)
 - [Settings](#settings)
@@ -42,6 +43,49 @@ py -3.12 -m venv .venv
 Start the tray app with `.venv\Scripts\pythonw.exe -m lookfocus` (no console window). `lookfocus run` runs
 the same engine in a console, which is useful for testing. Add `--dry-run` to decide without moving focus, or
 `--stats` for CPU and fps every 10 s.
+
+## Linux (KDE Plasma)
+LookFocus also runs on **KDE Plasma 6 on Wayland** (developed on Fedora 45, Plasma 6.8). It works the same
+way and uses the same calibration, settings and tray menu. Other desktops (GNOME, X11 sessions) aren't
+supported: on Wayland, only the window manager may move focus between windows, and LookFocus talks to
+KDE's (KWin).
+
+**Install from source** (there's no prebuilt download for Linux yet). You need Python 3.12, which
+[uv](https://docs.astral.sh/uv/) fetches for you, and PipeWire, GStreamer and `pw-dump`, which Fedora
+KDE ships by default (`pipewire-gstreamer`, `pipewire-utils`):
+
+```bash
+uv venv --python 3.12 .venv-linux
+uv pip install --python .venv-linux/bin/python -r requirements-linux.lock
+uv pip install --python .venv-linux/bin/python --no-deps -e .
+.venv-linux/bin/python -m lookfocus          # the tray app; first run offers to set up
+```
+
+The commands are the same as on Windows (`.venv-linux/bin/lookfocus calibrate --zones 2`, `run --dry-run`,
+`watch`). Settings, calibration and logs live in `~/.config/lookfocus/`. **Start at login** in the tray menu
+adds `~/.config/autostart/lookfocus.desktop`.
+
+How it works on Plasma:
+- **Windows and focus:** LookFocus loads a small KWin script (KDE's own scripting interface) that reports
+  which window is active, where windows are and where the pointer is, and activates the window you look at.
+  The script runs only while LookFocus runs. Switching takes a few milliseconds and never needs the Alt-tap
+  tricks Windows requires.
+- **Camera:** through PipeWire, the way Plasma and the browsers reach cameras. PipeWire shares the camera, so
+  a video call and LookFocus can use it at the same time; there's nothing like Windows' camera-sharing setting
+  to turn on. Laptops with Intel IPU (MIPI) cameras work only this way. `"camera_backend": "v4l2"` reads a USB
+  webcam directly instead, without sharing.
+- **Typing and the mouse:** typing is noticed through Wayland's idle notification (it says *that* some input
+  happened, never which key) and the pointer position comes from KWin. Mouse buttons can't be seen without
+  reading input devices directly, which LookFocus never does; a click that doesn't move the pointer counts as
+  typing, which only lengthens the next dwell.
+- **Pause shortcut:** Ctrl+Alt+Shift+G is a KDE global shortcut. To change it, use System Settings >
+  Keyboard > Shortcuts > KWin > *LookFocus: pause or resume*; the `hotkey` setting only sets the initial
+  key.
+- **Lock, sleep and screen off** pause LookFocus and turn the camera off, as on Windows.
+
+Not available on Linux: `move_cursor_on_switch` (Wayland lets no program move the pointer),
+`allow_alt_fallback` and `--elevated` (not needed), and the camera-sharing check. Tested on one laptop (one
+built-in screen in zone mode, an Intel IPU7 camera); several real monitors haven't been tested on Linux either.
 
 ## Calibration
 A dot appears on each display in turn: centre, left, right, top and bottom. Each dot is yellow while you settle
@@ -268,7 +312,9 @@ Tools:
 
 Layout: `src/lookfocus/`. The pure, unit-tested logic (pose, displays, calibration, classifier, decision,
 input tracker, targeting, config, camera-usage policy) is separate from the Windows parts (capture,
-monitors, overlay, focus, tray, system events). `CLAUDE.md` has the conventions; `DECISIONS.md` has the why
+monitors, overlay, focus, tray, system events) and their Linux counterparts in `src/lookfocus/linux/`;
+`backend.py` picks one set. On Linux, run the same checks with `.venv-linux/bin/python -m pytest` (and
+`ruff`); `tools/net_audit.py` and `tools/debug_pose.py` work there too. `CLAUDE.md` has the conventions; `DECISIONS.md` has the why
 and the measurements behind every choice. mediapipe must stay at 0.10.33; after any dependency change run
 pytest and `tools\net_audit.py`.
 

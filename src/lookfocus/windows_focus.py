@@ -334,6 +334,12 @@ def candidate_windows(own_pid: int | None = None) -> list[WindowInfo]:
     return [window_info(h) for h in hwnds if is_candidate(h, own_pid)]
 
 
+def foreground_window() -> WindowInfo | None:
+    """The foreground window's root owner if it is a focus target (the daemon seeds its state from it)."""
+    fg = root_owner(GetForegroundWindow() or 0)
+    return window_info(fg) if fg and is_candidate(fg) else None
+
+
 def foreground_lock_timeout_ms() -> int:
     v = DWORD()
     SystemParametersInfoW(SPI_GETFOREGROUNDLOCKTIMEOUT, 0, ctypes.byref(v), 0)

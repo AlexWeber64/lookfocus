@@ -2,13 +2,14 @@
 
     lookfocus calibrate [--zones N]      optional camera-sharing setup step, then dots on each display
     lookfocus watch [--zones N]          print "facing: <display>" live
-    lookfocus camera-sharing             check / set up Windows' multi-app camera setting
+    lookfocus camera-sharing             check / set up Windows' multi-app camera setting (Windows only)
 
     lookfocus run [--dry-run] [--stats]  the engine in this console
     lookfocus [tray] [--elevated]        the tray app (what autostart runs)
 
 Run from the venv: `.venv\\Scripts\\lookfocus.exe ...` or `python -m lookfocus`. The PyInstaller build has
-LookFocus.exe (the tray app) and lookfocus-cli.exe (these commands).
+LookFocus.exe (the tray app) and lookfocus-cli.exe (these commands). On Linux (KDE Plasma, Wayland):
+`.venv-linux/bin/lookfocus ...`.
 """
 
 from __future__ import annotations
@@ -19,8 +20,9 @@ import logging
 import sys
 from pathlib import Path
 
+from lookfocus import backend, paths
 from lookfocus import calibration as C
-from lookfocus import paths
+from lookfocus.config import BACKENDS
 from lookfocus.displays import LayoutError, LogicalDisplay, build_displays, require_multiple
 
 log = logging.getLogger("lookfocus")
@@ -28,8 +30,7 @@ POSE_SOURCES = ("matrix", "lm3d", "lm2d")
 
 
 def _displays(zones: int) -> list[LogicalDisplay]:
-    from lookfocus import monitors
-
+    monitors = backend.monitors()
     mode = monitors.enable_dpi_awareness()
     mons = monitors.list_monitors()
     log.info("DPI awareness: %s; %d monitor(s)", mode, len(mons))
@@ -52,7 +53,6 @@ def _print_layout(ds: list[LogicalDisplay]) -> None:
 
 def cmd_calibrate(args) -> int:
     from lookfocus import camera_sharing
-    from lookfocus import overlay as O
     from lookfocus.calibrator import Calibrator, CalibratorSettings, Cancelled, separability
     from lookfocus.capture import CaptureThread, LatestSlot
 
@@ -60,7 +60,7 @@ def cmd_calibrate(args) -> int:
     print(f"LookFocus calibration: {len(ds)} displays")
     _print_layout(ds)
     print()
-    if not args.skip_camera_sharing:
+    if not args.skip_camera_sharing and backend.WINDOWS:  # PipeWire shares cameras: nothing to set up
         camera_sharing.run_setup_step(_capture_settings(args))
         print()
     print("Next: a dark screen appears on each display in turn with 5 dots.")
@@ -75,7 +75,7 @@ def cmd_calibrate(args) -> int:
     slot = LatestSlot()
     capture = CaptureThread(_capture_settings(args, probe_sharing=False), slot)
     capture.start()
-    ov = O.Overlay()
+    ov = backend.overlay().Overlay()
     try:
         cal = Calibrator(slot, ov, CalibratorSettings(source=args.pose_source)).run(ds, args.zones)
     except (Cancelled, KeyboardInterrupt):
@@ -204,6 +204,9 @@ def cmd_watch(args) -> int:
 def cmd_camera_sharing(args) -> int:
     from lookfocus import camera_sharing
 
+    if not backend.WINDOWS:
+        print("On Linux, PipeWire shares the camera between apps: there is nothing to set up.")
+        return 0
     camera_sharing.run_setup_step(_capture_settings(args))
     return 0
 
@@ -214,9 +217,12 @@ def cmd_run(args) -> int:
     from dataclasses import replace
 
     from lookfocus import config as K
-    from lookfocus import windows_focus as wf
     from lookfocus.daemon import Daemon, settings_from_config
 
+    wf = backend.focus()
+    if args.elevated and not backend.WINDOWS:
+        print("--elevated is for Windows only (Wayland has no such barrier between your own windows).")
+        return 1
     if args.elevated and not wf.we_are_elevated():
         cmd = paths.app_command(*[a for a in sys.argv[1:] if a != "--elevated"], console=True)
         if wf.start_elevated(cmd[0], cmd[1:], show=1):
@@ -275,8 +281,8 @@ def cmd_run(args) -> int:
 
     d = Daemon(settings, cal, on_status=on_status, on_event=on_event)
     mode = " (dry run: no focus changes)" if args.dry_run else ""
-    elev = "elevated" if wf.we_are_elevated() else "not elevated"
-    print(f"LookFocus running on {len(ds)} displays{mode}, {elev}. Ctrl+C to stop.")
+    elev = ", elevated" if wf.we_are_elevated() else (", not elevated" if backend.WINDOWS else "")
+    print(f"LookFocus running on {len(ds)} displays{mode}{elev}. Ctrl+C to stop.")
     d.start()
     try:
         if args.stats:
@@ -332,7 +338,7 @@ def build_parser() -> argparse.ArgumentParser:
             default=zones_default,
             help="split the primary monitor into N side-by-side logical displays",
         )
-        p.add_argument("--backend", choices=["msmf", "dshow"], default=None if from_config else "msmf")
+        p.add_argument("--backend", choices=list(BACKENDS), default=None if from_config else BACKENDS[0])
         p.add_argument("--no-fallback", action="store_true", help="don't try the other camera backend")
         p.add_argument("--pose-source", choices=POSE_SOURCES, default=None if from_config else "matrix")
         p.add_argument("--calibration", default=str(paths.data_dir() / "calibration.json"))
@@ -348,7 +354,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--verbose", action="store_true", help="print every sample, not just changes")
     p.set_defaults(func=cmd_watch)
 
-    p = sub.add_parser("camera-sharing", help="check Windows' multi-app camera setting")
+    p = sub.add_parser("camera-sharing", help="check Windows' multi-app camera setting (Windows only)")
     common(p, 0)
     p.set_defaults(func=cmd_camera_sharing)
 
@@ -376,6 +382,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.cmd in (None, "tray"):  # no command = the tray app (what autostart runs)
+        if not backend.WINDOWS:
+            from lookfocus.linux import tray as linux_tray
+
+            return linux_tray.main()
         from lookfocus import tray
 
         return tray.main(elevated=getattr(args, "elevated", False))
@@ -386,6 +396,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.func(args)
     except LayoutError as e:
+        print(f"LookFocus: {e}")
+        return 2
+    except RuntimeError as e:  # e.g. linux.kwin.BridgeError outside KDE Plasma on Wayland
+        if type(e).__name__ != "BridgeError":
+            raise
         print(f"LookFocus: {e}")
         return 2
 
