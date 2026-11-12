@@ -25,8 +25,10 @@ def test_missing_file_is_defaults(tmp_path):
 
 
 def test_bad_values_fall_back_individually():
-    cfg, problems = K.from_dict({"dwell_ms": -5, "fps": 120, "hysteresis": 3, "camera_backend": "v4l2"})
-    assert cfg.dwell_ms == 300 and cfg.fps == 15.0 and cfg.camera_backend == "msmf"
+    cfg, problems = K.from_dict(
+        {"dwell_ms": -5, "fps": 120, "hysteresis": 3, "camera_backend": "avfoundation"}
+    )
+    assert cfg.dwell_ms == 300 and cfg.fps == 15.0 and cfg.camera_backend == K.BACKENDS[0]
     assert cfg.hysteresis == 3.0  # int accepted for a float field
     assert len(problems) == 3 and any("dwell_ms" in p for p in problems)
 

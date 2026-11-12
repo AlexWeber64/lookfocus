@@ -168,7 +168,9 @@ On the test laptop it uses about 6-8% of the processor while it sees you, about 
 nothing while paused.
 
 **Mac or Linux? Windows 10?**
-Windows 11 only. Windows 10 might work but hasn't been tested.
+On Linux, LookFocus runs on KDE Plasma 6 (Wayland), installed from source for now: see
+[Linux in the guide](docs/GUIDE.md#linux-kde-plasma). No Mac version. Windows 10 might work but hasn't been
+tested.
 
 **How do I get rid of it?**
 Untick **Start with Windows**, choose **Quit**, then delete the LookFocus folder and `%APPDATA%\LookFocus`.

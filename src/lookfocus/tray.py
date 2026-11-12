@@ -1,6 +1,8 @@
 """LookFocus tray app: the engine (daemon.Daemon) plus tray icon, notifications, pause hotkey, autostart,
 session lock / sleep handling, config file and rotating logs.
 
+Shared by both platforms: on Linux, linux/tray.py subclasses TrayApp and shows the same menu through Qt.
+
 Threads: pystray's icon loop (main thread; menu callbacks run here, so anything slow is handed to a worker),
 SystemEvents (hotkey, lock, sleep, display), the engine's threads, a config-file watcher, and on demand a
 calibration thread (owns the overlay window) and a debug-view thread (owns the HighGUI window).
@@ -26,12 +28,14 @@ from pathlib import Path
 import pystray
 from PIL import Image, ImageDraw
 
-from lookfocus import autostart, paths
+from lookfocus import backend, paths
 from lookfocus import calibration as C
 from lookfocus import config as K
 from lookfocus.displays import LayoutError, build_displays, require_multiple
 
 log = logging.getLogger("lookfocus.tray")
+autostart = backend.autostart()
+AUTOSTART = backend.AUTOSTART_LABEL
 
 STATE_COLORS = {
     "active": (46, 160, 67),
@@ -123,6 +127,10 @@ def install_crash_logging() -> None:
 
 
 def message_box(text: str, flags: int = MB_OK | MB_ICONINFO) -> int:
+    if not backend.WINDOWS:
+        from lookfocus.linux import qt
+
+        return qt.message_box(text, flags)
     user32 = ctypes.WinDLL("user32")
     user32.MessageBoxW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint]
     return user32.MessageBoxW(None, text, "LookFocus", flags | MB_SETFOREGROUND | MB_TOPMOST)
@@ -177,10 +185,13 @@ class TrayApp:
         self._cameras: tuple[float, list] = (0.0, [])
         self._monitors: tuple[float, int] = (0.0, 1)
         self._restarts: deque[float] = deque()
-        from lookfocus.sysevents import SystemEvents
+        self.sys = backend.sysevents().SystemEvents(self._on_system, self.cfg.hotkey)
+        self.icon = self._create_icon(
+            "LookFocus", self._icons["no_face"], "LookFocus: starting", self._menu()
+        )
 
-        self.sys = SystemEvents(self._on_system, self.cfg.hotkey)
-        self.icon = _TrayIcon("LookFocus", self._icons["no_face"], "LookFocus: starting", menu=self._menu())
+    def _create_icon(self, name: str, image, title: str, menu):
+        return _TrayIcon(name, image, title, menu=menu)
 
     # --- lifecycle -----------------------------------------------------------------------------
     def run(self) -> None:
@@ -196,7 +207,7 @@ class TrayApp:
             self.notify("Config problems", "; ".join(self.cfg_problems)[:250])
         try:
             if autostart.refresh():
-                log.info("Start with Windows now points at this copy: %s", autostart.command())
+                log.info("%s now points at this copy: %s", AUTOSTART, autostart.command())
         except OSError as e:
             log.warning("couldn't update the autostart entry: %s", e)
         threading.Thread(target=self._housekeeping, name="housekeeping", daemon=True).start()
@@ -226,8 +237,9 @@ class TrayApp:
             self.notify("LookFocus couldn't start", f"{detail} (see {self.log_path})")
 
     def _start_engine_unchecked(self) -> None:
-        from lookfocus import monitors
         from lookfocus.daemon import Daemon
+
+        monitors = backend.monitors()
 
         with self.lock:
             if self.daemon is not None or self.calibrating or self._halt.is_set():
@@ -433,7 +445,7 @@ class TrayApp:
                 enabled=lambda _: self.daemon is not None or self._viewer is not None,
             ),
             item(
-                "Start with Windows",
+                AUTOSTART,
                 lambda: self.toggle_autostart(),
                 checked=lambda _: autostart.is_enabled(),
             ),
@@ -480,12 +492,10 @@ class TrayApp:
             )
 
     def _monitor_count(self) -> int:
-        from lookfocus import monitors
-
         t, n = self._monitors
         if time.monotonic() - t > 5:
             try:
-                n = len(monitors.list_monitors())
+                n = len(backend.monitors().list_monitors())
             except Exception:
                 log.exception("monitor enumeration failed")
             self._monitors = (time.monotonic(), n)
@@ -580,7 +590,7 @@ class TrayApp:
         try:
             autostart.set_enabled(not autostart.is_enabled())
         except OSError as e:
-            self.notify("Start with Windows", f"Couldn't change the setting: {e}")
+            self.notify(AUTOSTART, f"Couldn't change the setting: {e}")
         self._refresh_menu()
 
     # --- config file ---------------------------------------------------------------------------
@@ -658,9 +668,6 @@ class TrayApp:
             self._overlay.cancelled = True
 
     def _calibrate(self) -> None:
-        from lookfocus import monitors
-        from lookfocus import overlay as O
-        from lookfocus import windows_focus as wf
         from lookfocus.calibrator import Calibrator, CalibratorSettings, Cancelled, separability
         from lookfocus.capture import CaptureThread, LatestSlot
         from lookfocus.daemon import capture_settings
@@ -668,12 +675,13 @@ class TrayApp:
         self._stop_engine()  # release the camera: calibration runs its own capture
         capture = ov = None
         try:
-            ds = build_displays(monitors.list_monitors(), self.cfg.zones)
+            wf = backend.focus()
+            ds = build_displays(backend.monitors().list_monitors(), self.cfg.zones)
             require_multiple(ds, self.cfg.zones)
             slot = LatestSlot()
             capture = CaptureThread(capture_settings(self.cfg, probe_sharing=False), slot)
             capture.start()
-            ov = self._overlay = O.Overlay()
+            ov = self._overlay = backend.overlay().Overlay()
             cal = Calibrator(
                 slot,
                 ov,
@@ -688,7 +696,7 @@ class TrayApp:
                     "Calibration saved, with a warning", problems[0][:200] + ". Consider recalibrating."
                 )
             else:
-                tip = "" if autostart.is_enabled() else " Tip: tick Start with Windows in the menu."
+                tip = "" if autostart.is_enabled() else f" Tip: tick {AUTOSTART} in the menu."
                 self.notify(
                     "Calibration saved", "All displays can be told apart. LookFocus is running." + tip
                 )

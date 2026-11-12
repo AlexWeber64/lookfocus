@@ -21,13 +21,12 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from lookfocus import monitors
+from lookfocus import backend
 from lookfocus.calibration import Calibration
 from lookfocus.capture import CaptureSettings, CaptureThread, LatestSlot
 from lookfocus.classifier import Classifier
 from lookfocus.decision import NONE, DecisionMachine, DecisionSettings, Observation
 from lookfocus.displays import LogicalDisplay, build_displays
-from lookfocus.inputactivity import InputPoller
 from lookfocus.pose import PoseSample
 from lookfocus.targeting import StageLearner, display_of
 
@@ -124,8 +123,7 @@ class FocusExecutor(threading.Thread):
                     log.exception("focus request failed")
 
     def _focus(self, display_id: str) -> None:
-        from lookfocus import windows_focus as wf
-
+        wf = backend.focus()
         d = self.d
         display = d.display_by_id.get(display_id)
         if display is None:
@@ -167,7 +165,7 @@ class Daemon:
         on_event: EventCallback | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        from lookfocus.windows_focus import ForegroundTracker
+        ForegroundTracker = backend.focus().ForegroundTracker
 
         self.settings = settings
         self.calibration = calibration
@@ -181,7 +179,7 @@ class Daemon:
         self.layout_ok = True
         self.poses: LatestSlot[PoseSample] = LatestSlot()
         self.capture = CaptureThread(settings.capture, self.poses, on_event=self._capture_event)
-        self.input = InputPoller(clock=clock)
+        self.input = backend.input_poller(clock)
         self.tracker = ForegroundTracker(lambda: self.displays)
         self.executor = FocusExecutor(self)
         self._paused = False
@@ -243,7 +241,7 @@ class Daemon:
                     log.exception("status handler failed")
 
     def _refresh_layout(self) -> None:
-        ds = build_displays(monitors.list_monitors(), self.settings.zones)
+        ds = build_displays(backend.monitors().list_monitors(), self.settings.zones)
         missing, added = self.calibration.check_layout(ds)
         ok = not missing and not added
         if [d.id for d in ds] != [d.id for d in self.displays]:
@@ -258,11 +256,9 @@ class Daemon:
                 log.info("display layout matches the calibration again")
 
     def _seed_from_foreground(self) -> None:
-        from lookfocus import windows_focus as wf
-
         try:
-            fg = wf.root_owner(wf.GetForegroundWindow() or 0)
-            d = display_of(wf.window_info(fg), self.displays) if fg and wf.is_candidate(fg) else None
+            fg = backend.focus().foreground_window()
+            d = display_of(fg, self.displays) if fg is not None else None
         except Exception:
             d = None
         self.machine.seed(d.id if d else None)

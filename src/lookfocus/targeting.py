@@ -28,7 +28,7 @@ VK_MENU = 0x12  # Alt
 
 @dataclass(frozen=True)
 class WindowInfo:
-    hwnd: int
+    hwnd: int | str  # Win32 HWND; on Linux the KWin window id (linux/windowlist.py)
     title: str
     cls: str
     pid: int
@@ -50,7 +50,7 @@ def display_of(w: WindowInfo, displays: list[LogicalDisplay]) -> LogicalDisplay 
 
 def choose_target(
     display: LogicalDisplay,
-    remembered: int | None,
+    remembered: int | str | None,
     windows: list[WindowInfo],
     displays: list[LogicalDisplay],
 ) -> WindowInfo | None:
