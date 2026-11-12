@@ -10,7 +10,6 @@ from __future__ import annotations
 import re
 
 from lookfocus.displays import Monitor, Rect
-from lookfocus.linux.kwin import get_bridge
 
 # Connector names of built-in panels (they get the "built-in display" label, like unnamed Windows panels).
 _INTERNAL = re.compile(r"^(eDP|LVDS|DSI)-", re.I)
@@ -48,4 +47,6 @@ def monitors_from(info: dict) -> list[Monitor]:
 
 
 def list_monitors() -> list[Monitor]:
+    from lookfocus.linux.kwin import get_bridge  # here, so the pure parts above import anywhere (tests)
+
     return monitors_from(get_bridge().request("screens"))

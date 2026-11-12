@@ -1,6 +1,6 @@
 """The Linux backend's pure logic: KWin window filtering, screens, PipeWire camera discovery, the bridge
-script, autostart quoting, KDE shortcuts, the Wayland wire format. Hardware-free; runs everywhere except
-where noted."""
+script, autostart quoting, KDE shortcuts, the Wayland wire format. Hardware-free; runs on Windows too, except
+the bridge-script tests (jeepney is Linux-only) and the Qt check."""
 
 import json
 import subprocess
@@ -169,6 +169,10 @@ class TestPipeWire:
 
 
 class TestBridgeScript:
+    @pytest.fixture(autouse=True)
+    def _needs_jeepney(self):
+        pytest.importorskip("jeepney", reason="jeepney is a Linux-only dependency")
+
     def test_placeholders_filled_and_strings_escaped(self):
         from lookfocus.linux.kwin import render_script
 

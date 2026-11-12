@@ -15,7 +15,6 @@ with LookFocus: it runs under a tiny shell that kills it when its stdin (held by
 
 from __future__ import annotations
 
-import fcntl
 import json
 import logging
 import os
@@ -97,6 +96,8 @@ V4L2_CAP_VIDEO_CAPTURE, V4L2_CAP_DEVICE_CAPS = 0x00000001, 0x80000000
 
 def _v4l2_is_capture(dev: Path) -> bool:
     """A real capture node (not metadata or a raw MIPI CSI node with no usable formats... best effort)."""
+    import fcntl  # Unix-only; imported here so the pure PipeWire parsing above imports anywhere (tests)
+
     try:
         fd = os.open(dev, os.O_RDWR | os.O_NONBLOCK)
     except OSError:
