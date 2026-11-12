@@ -1088,4 +1088,7 @@ with libcamera 0.7.2. Same repository folder as the Windows machine (dual boot),
 - DBus and Wayland are local Unix sockets. The KWin script is plain text in `$XDG_RUNTIME_DIR/lookfocus/`;
   frames never touch disk (screenshots taken during testing showed only the overlay, or the debug view with
   video off, and were deleted).
-- **Open:** the end-to-end check with a face (calibration and switching) needs the user at the camera.
+- **End to end with the user [verified]:** tray app, 2 zones on the built-in panel. Calibration passed every
+  dot on the first try (n 27 to 31 per dot, sd 0.1 to 0.8 deg); zone centres 22 deg apart in yaw, so
+  "all displays can be told apart". Then 12 switches between Konsole (left) and Firefox (right) in 30 s,
+  each about a second after the head turn, KWin activation 1.2 to 6.2 ms, all verified by KWin.
