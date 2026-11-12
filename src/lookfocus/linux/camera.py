@@ -48,7 +48,10 @@ class PipeWireCamera:
     serial: int
     node_name: str  # stable across restarts (e.g. "libcamera_input.__SB_.LNK0"); what pipewiresrc targets
     description: str
-    rotation: int  # sensor mounting rotation (libcamera), degrees
+    # Sensor mounting rotation as libcamera reports it. Informational only: PipeWire's libcamera source
+    # already delivers upright frames (measured on the IMX471, rotation 180: a face was found in 121 of 121
+    # frames as delivered, 6 of 121 after flipping them again), so LookFocus never rotates.
+    rotation: int
 
 
 def pipewire_cameras_from(dump: list) -> list[PipeWireCamera]:
@@ -154,7 +157,7 @@ _CAPS = re.compile(r"fdsink\d*\.GstPad:sink: caps = video/x-raw.*?width=\(int\)(
 class GstCapture:
     """A cv2.VideoCapture look-alike reading BGR frames from a gst-launch-1.0 PipeWire pipeline."""
 
-    def __init__(self, node_name: str, width: int, fps: float, rotation: int = 0) -> None:
+    def __init__(self, node_name: str, width: int, fps: float) -> None:
         self.node_name = node_name
         self._proc: subprocess.Popen | None = None
         self._rfd = -1
@@ -168,13 +171,11 @@ class GstCapture:
         gst = shutil.which("gst-launch-1.0")
         if gst is None:
             raise RuntimeError("gst-launch-1.0 not found (install gstreamer1 and pipewire-gstreamer)")
-        flip = {90: "clockwise", 180: "rotate-180", 270: "counterclockwise"}.get(rotation % 360)
         rate = max(1, round(fps))
         pipeline = [
             "pipewiresrc", f"target-object={node_name}", "do-timestamp=true", "!",
             "videorate", "drop-only=true", "!", f"video/x-raw,framerate={rate}/1", "!",
             "videoconvert", "!",
-            *(["videoflip", f"method={flip}", "!"] if flip else []),
             "videoscale", "!",
             f"video/x-raw,format=BGR,width={int(width)},pixel-aspect-ratio=1/1", "!",
             "fdsink", "fd=3", "sync=false",
@@ -296,7 +297,7 @@ def open_pipewire(index: int, width: int, fps: float, timeout_s: float) -> tuple
             return None, "no such PipeWire camera"
     cam = cams[index]
     try:
-        cap = GstCapture(cam.node_name, width, fps, cam.rotation)
+        cap = GstCapture(cam.node_name, width, fps)
     except (OSError, RuntimeError) as e:
         return None, str(e)
     t0 = time.monotonic()

@@ -1050,8 +1050,10 @@ with libcamera 0.7.2. Same repository folder as the Windows machine (dual boot),
 - The camera delivers ~56 fps; `videorate max-rate=15` didn't limit variable-rate PipeWire caps (275 frames in
   5 s) but a `framerate=15/1` caps filter did (measured 15.7 fps).
 - Cameras come from `pw-dump`: `Video/Source` nodes with the Camera role or a libcamera/v4l2 device (screen
-  casts are skipped), identified by the stable node name. The sensor reports `api.libcamera.rotation: 180`;
-  the pipeline can flip for it, and whether frames need that is checked with a face in view (D-055).
+  casts are skipped), identified by the stable node name. The sensor reports `api.libcamera.rotation: 180`,
+  but PipeWire's libcamera source already delivers upright frames: with the user in view a face was found in
+  121 of 121 frames as delivered and 6 of 121 after a further 180-degree flip. A first version flipped for
+  the property, which made calibration fail with "no face"; LookFocus no longer rotates frames.
 - `v4l2` (OpenCV's V4L2 backend) stays as the fallback for USB webcams without PipeWire; it has no
   other-app detection.
 
@@ -1086,5 +1088,4 @@ with libcamera 0.7.2. Same repository folder as the Windows machine (dual boot),
 - DBus and Wayland are local Unix sockets. The KWin script is plain text in `$XDG_RUNTIME_DIR/lookfocus/`;
   frames never touch disk (screenshots taken during testing showed only the overlay, or the debug view with
   video off, and were deleted).
-- **Open:** the end-to-end check with a face (calibration, switching, and whether the 180-degree sensor needs
-  the flip) needs the user at the camera.
+- **Open:** the end-to-end check with a face (calibration and switching) needs the user at the camera.
