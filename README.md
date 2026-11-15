@@ -10,10 +10,7 @@ LookFocus notices which screen you're facing and puts your keyboard there. No re
 no clicking a window first. It runs quietly in the Windows tray and never goes online.
 </p>
 
-<p align="center">
-  <a href="docs/media/lookfocus-demo.mp4"><img src="docs/media/lookfocus-demo.gif" width="800" alt="The user turns their head from the left monitor to the right one and keyboard focus follows"></a><br>
-  <a href="docs/media/lookfocus-demo.mp4">Watch the full 21-second video, with sound</a>
-</p>
+https://github.com/user-attachments/assets/0295cb76-d3d4-469d-89f0-e83276c6f65d
 
 <p align="center"><a href="https://github.com/AlexWeber64/lookfocus/releases/latest"><b>Download for Windows 11</b></a></p>
 
