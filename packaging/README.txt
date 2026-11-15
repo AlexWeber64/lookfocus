@@ -4,7 +4,7 @@ LookFocus {version}
 Look at a monitor and just type. LookFocus notices which screen you're facing (through your webcam) and
 puts your keyboard there. It runs in the Windows tray and never goes online.
 
-Project page, source code and updates: https://gitlab.com/AlexWeber64/lookfocus
+Project page, source code and updates: https://github.com/AlexWeber64/lookfocus
 
 
 START
@@ -54,4 +54,4 @@ UNINSTALL
 LICENSE
 -------
 LookFocus is free software under the GNU General Public License v3.0 (LICENSE.txt). Its source code is at
-https://gitlab.com/AlexWeber64/lookfocus. Third-party software notices are in the third-party-licenses folder.
+https://github.com/AlexWeber64/lookfocus. Third-party software notices are in the third-party-licenses folder.

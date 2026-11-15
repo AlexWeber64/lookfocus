@@ -10,9 +10,12 @@ LookFocus notices which screen you're facing and puts your keyboard there. No re
 no clicking a window first. It runs quietly in the Windows tray and never goes online.
 </p>
 
-![LookFocus in 21 seconds: the user turns their head from the left monitor to the right one and keyboard focus follows](docs/media/lookfocus-demo.mp4)
+<p align="center">
+  <a href="docs/media/lookfocus-demo.mp4"><img src="docs/media/lookfocus-demo.gif" width="800" alt="The user turns their head from the left monitor to the right one and keyboard focus follows"></a><br>
+  <a href="docs/media/lookfocus-demo.mp4">Watch the full 21-second video, with sound</a>
+</p>
 
-<p align="center"><a href="https://gitlab.com/AlexWeber64/lookfocus/-/releases/permalink/latest"><b>Download for Windows 11</b></a></p>
+<p align="center"><a href="https://github.com/AlexWeber64/lookfocus/releases/latest"><b>Download for Windows 11</b></a></p>
 
 ---
 
@@ -71,7 +74,7 @@ eight strips) as separate "screens".
 You'll need Windows 11 and a webcam in front of you (the built-in laptop camera is fine).
 
 1. Download **LookFocus-1.0.0-win64.zip** from the
-   [latest release](https://gitlab.com/AlexWeber64/lookfocus/-/releases/permalink/latest).
+   [latest release](https://github.com/AlexWeber64/lookfocus/releases/latest).
 2. Unzip it anywhere you like, for example in your Documents folder.
 3. Open the `LookFocus` folder and double-click **LookFocus.exe**.
    The first time, Windows may say *"Windows protected your PC"*, because the app isn't signed by a company.
@@ -189,6 +192,8 @@ The full list, with details, is in the [guide](docs/GUIDE.md#known-limitations).
 - **[User guide](docs/GUIDE.md)**: every setting, troubleshooting, the standalone build, uninstalling,
   developer notes.
 - **[DECISIONS.md](DECISIONS.md)**: why it works the way it does, with the measurements behind each choice.
+- **Mirror:** the same repository is also on [GitLab](https://gitlab.com/AlexWeber64/lookfocus). Issues and
+  releases live here on GitHub.
 
 ## License
 

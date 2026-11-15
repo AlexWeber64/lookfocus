@@ -964,3 +964,17 @@ to public.
     `-/releases/permalink/latest/downloads/LookFocus-win64.zip` always serves the newest zip.
 - **Public:** project visibility switched to public afterwards. Checked without logging in: project page,
   README, demo mp4, release page, checksum and the full zip download (exact size and hash) all return 200.
+
+### D-056 GitHub is the primary host, GitLab a mirror **[done: links switched and checked]**
+(Numbered after the Linux port's D-050 to D-055, which were written on the `linux-support` branch at the same
+time.) The GitHub account works again, so from 2026-11-16 the project lives at
+`github.com/AlexWeber64/lookfocus`, with `gitlab.com/AlexWeber64/lookfocus` kept as a mirror with the same
+history. This replaces the GitLab-only part of D-048.
+- **Links:** the README download links point to `/releases/latest` on GitHub, the guide to GitHub's releases
+  page, and the `README.txt` in the release zip to the GitHub project. The README names the GitLab mirror.
+- **Releases:** the zip (~96 MB) fits under GitHub's 2 GB asset limit, so it is a plain release asset, with its
+  `.sha256` beside it. v1.0.0 is already published that way.
+- **Demo in the README:** GitHub doesn't turn a markdown link to an `.mp4` in the repository into a video
+  player (it shows a text link; GitLab did play it). GitHub only plays videos uploaded through its own editor
+  (`github.com/user-attachments/...`), which needs the web UI. The README therefore shows the GIF (7.8 s,
+  800x450, no sound), which renders on both hosts, linked to the full 21-second video with sound.
