@@ -976,5 +976,6 @@ history. This replaces the GitLab-only part of D-048.
   `.sha256` beside it. v1.0.0 is already published that way.
 - **Demo in the README:** GitHub doesn't turn a markdown link to an `.mp4` in the repository into a video
   player (it shows a text link; GitLab did play it). GitHub only plays videos uploaded through its own editor
-  (`github.com/user-attachments/...`), which needs the web UI. The README therefore shows the GIF (7.8 s,
-  800x450, no sound), which renders on both hosts, linked to the full 21-second video with sound.
+  (`github.com/user-attachments/...`), which needs the web UI. The user uploaded `docs/media/lookfocus-demo.mp4`
+  that way, and the README embeds that URL on a line of its own, so GitHub shows a player with sound. On the
+  GitLab mirror the same line is a plain link. The GIF stays in `docs/media/` for sharing.
