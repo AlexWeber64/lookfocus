@@ -1092,6 +1092,7 @@ with libcamera 0.7.2. Same repository folder as the Windows machine (dual boot),
   dot on the first try (n 27 to 31 per dot, sd 0.1 to 0.8 deg); zone centres 22 deg apart in yaw, so
   "all displays can be told apart". Then 12 switches between Konsole (left) and Firefox (right) in 30 s,
   each about a second after the head turn, KWin activation 1.2 to 6.2 ms, all verified by KWin.
+
 ### D-056 GitHub is the primary host, GitLab a mirror **[done: links switched and checked]**
 (Numbered after the Linux port's D-050 to D-055, which were written on the `linux-support` branch at the same
 time.) The GitHub account works again, so from 2026-11-16 the project lives at
