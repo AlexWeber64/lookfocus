@@ -21,8 +21,12 @@ the measurements behind it.
 
 ## Install
 Requirements:
-- Windows 11, x64. Windows 10 may work but hasn't been tested.
-- A colour webcam roughly in front of you. A Windows Hello IR camera is detected and skipped automatically.
+- Windows 11, x64 (Windows 10 may work but hasn't been tested), or Linux with KDE Plasma 6 on Wayland (see
+  [Linux](#linux-kde-plasma) for that install).
+- A colour webcam roughly in front of you. On Windows, a Windows Hello IR camera is detected and skipped
+  automatically.
+
+The rest of this section is for Windows.
 
 **Download (recommended):** get `LookFocus-<version>-win64.zip` from the
 [releases page](https://github.com/AlexWeber64/lookfocus/releases), unzip it anywhere and
@@ -45,7 +49,7 @@ the same engine in a console, which is useful for testing. Add `--dry-run` to de
 `--stats` for CPU and fps every 10 s.
 
 ## Linux (KDE Plasma)
-LookFocus also runs on **KDE Plasma 6 on Wayland** (developed on Fedora 45, Plasma 6.8). It works the same
+LookFocus runs on **KDE Plasma 6 on Wayland** (developed on Fedora 45, Plasma 6.8). It works the same
 way and uses the same calibration, settings and tray menu. Other desktops (GNOME, X11 sessions) aren't
 supported: on Wayland, only the window manager may move focus between windows, and LookFocus talks to
 KDE's (KWin).
@@ -115,11 +119,12 @@ eyes. Press **Esc** to cancel; nothing changes until a calibration completes.
 - Hysteresis: leaving the current display needs a slightly clearer turn than entering it, so looking near the
   bezel doesn't flip back and forth.
 
-Pausing also happens automatically while the PC is locked, asleep or the screen is off. A manual pause (hotkey
-or tray) stays paused until you resume it.
+Pausing also happens automatically, on both systems, while the PC is locked, asleep or the screen is off. A
+manual pause (hotkey or tray) stays paused until you resume it.
 
 ## Settings
-`%APPDATA%\LookFocus\config.json` (tray: **Open config**). Edit and save: LookFocus applies the change within a
+`%APPDATA%\LookFocus\config.json` on Windows, `~/.config/lookfocus/config.json` on Linux (tray: **Open
+config**). Edit and save: LookFocus applies the change within a
 few seconds. A bad value is reported in a notification and replaced by its default; it never stops LookFocus.
 Use **Debug view** to see what LookFocus sees while you tune.
 
@@ -134,9 +139,9 @@ Use **Debug view** to see what LookFocus sees while you tune.
 | ignores you when you look at a far corner of a display | raise `none_margin` (6 → 8–10) |
 | switching right after using the mouse is too slow | lower `mouse_grace_ms` (1500 → 800) |
 | CPU use too high | lower `fps` (15 → 10) |
-| a menu bar flashes in some app when focus arrives | set `allow_alt_fallback` to `false` |
-| want the pointer to follow focus | `move_cursor_on_switch: true` |
-| camera slow to start | `camera_backend: "dshow"` (the other backend is always tried as a fallback) |
+| a menu bar flashes in some app when focus arrives (Windows) | set `allow_alt_fallback` to `false` |
+| want the pointer to follow focus (Windows) | `move_cursor_on_switch: true` |
+| camera slow to start (Windows) | `camera_backend: "dshow"` (the other backend is always tried as a fallback) |
 | up/down (stacked monitors) unreliable | try `pose_source: "lm3d"` (no recalibration needed) |
 
 | setting | default | range | meaning |
@@ -147,22 +152,26 @@ Use **Debug view** to see what LookFocus sees while you tune.
 | `mouse_grace_ms` | 1500 | 0–30000 | no switching while the mouse moves or a button is down, and this long after |
 | `hysteresis` | 2.0 | 0–50 | how much more clearly you must face a new display than the current one (normalized calibration units, roughly 1–2° each) |
 | `none_margin` | 6.0 | 0.5–100 | how far outside every display a pose must be to count as "none" (same units) |
-| `move_cursor_on_switch` | false | | also move the pointer to the newly focused display |
-| `allow_alt_fallback` | true | | allow the last-resort Alt key tap when Windows refuses focus |
+| `move_cursor_on_switch` | false | | also move the pointer to the newly focused display (Windows only: Wayland doesn't allow it) |
+| `allow_alt_fallback` | true | | allow the last-resort Alt key tap when Windows refuses focus (Windows only) |
 | `fps` | 15 | 1–30 | camera frames processed per second while a face is visible |
-| `camera_backend` | "msmf" | msmf, dshow | Windows camera API tried first |
+| `camera_backend` | "msmf" (Windows), "pipewire" (Linux) | msmf, dshow; pipewire, v4l2 | camera API tried first |
 | `camera_index` / `camera_name` / `camera_path` | automatic | | the camera to use; set by **Choose camera** |
 | `yield_camera_to_other_apps` | true | | release the camera when another app needs it |
 | `zones` | 0 | 0, 2–8 | split the primary monitor into N side-by-side zones; 0 = one display per monitor (tray: **Screen zones**) |
 | `pose_source` | "matrix" | matrix, lm3d, lm2d | which head-angle estimate to classify |
-| `hotkey` | "ctrl+alt+shift+g" | | pause hotkey: modifiers (ctrl, alt, shift, win) + a letter, digit, F1–F24 or a named key such as `pause` or `space` |
+| `hotkey` | "ctrl+alt+shift+g" | | pause hotkey: modifiers (ctrl, alt, shift, win) + a letter, digit, F1–F24 or a named key such as `pause` or `space`. On Linux it only sets the first KDE shortcut (see [Linux](#linux-kde-plasma)) |
 | `notifications` | true | | tray notifications |
 | `log_level` | "INFO" | DEBUG, INFO, WARNING, ERROR | log detail |
 
 ## Video calls and camera sharing
-Without extra settings, Windows lets only one app at a time get images from a camera. LookFocus watches for
-other apps opening the camera (a video call, the Camera app, a browser). When one does, LookFocus **releases
-the camera**, shows a notification and resumes when that app is done.
+**On Linux** there's nothing to do: the camera goes through PipeWire, which shares it, so a call and LookFocus
+both get images at the same time. (With `"camera_backend": "v4l2"` LookFocus reads the camera directly,
+without sharing, and doesn't notice other apps wanting it.)
+
+**On Windows,** without extra settings, Windows lets only one app at a time get images from a camera.
+LookFocus watches for other apps opening the camera (a video call, the Camera app, a browser). When one does,
+LookFocus **releases the camera**, shows a notification and resumes when that app is done.
 
 Windows 11 24H2 (build 26100.3321) and later also have **"Allow multiple apps to use camera at the same
 time"** under *Settings > Bluetooth & devices > Cameras > (your camera) > Advanced camera options*. With it
@@ -173,12 +182,12 @@ With the setting on, Windows serves every app the resolution chosen in camera se
 therefore changes what LookFocus sees, and LookFocus suggests recalibrating when that happens.
 
 ## Administrator windows
-Windows doesn't let a normal program take keyboard focus away from a window running as administrator.
-LookFocus can switch *to* an admin window (Task Manager is one), but not *away* from one. It notices
-immediately, does nothing and mentions it once per session. If you work in admin windows a lot, right-click
-`LookFocus.exe` → **Run as administrator** (from source: `.venv\Scripts\pythonw.exe -m lookfocus tray
---elevated`). It asks for UAC approval at every start; Start with Windows can't do this, so autostart always
-runs non-elevated.
+This is Windows only; on Linux, KWin can focus any window. Windows doesn't let a normal program take keyboard
+focus away from a window running as administrator. LookFocus can switch *to* an admin window (Task Manager is
+one), but not *away* from one. It notices immediately, does nothing and mentions it once per session. If you
+work in admin windows a lot, right-click `LookFocus.exe` → **Run as administrator** (from source:
+`.venv\Scripts\pythonw.exe -m lookfocus tray --elevated`). It asks for UAC approval at every start; Start with
+Windows can't do this, so autostart always runs non-elevated.
 
 ## Troubleshooting
 - **Red ! icon:** hover for the reason.
@@ -196,30 +205,35 @@ runs non-elevated.
 - **Switches to the wrong display:** recalibrate, and check that the camera hasn't moved. If the
   calibration result warned that displays are close, move the camera to the centre, or turn your head more
   during calibration and use.
-- **"Camera released for ..." notifications during calls:** expected with camera sharing off. Turn the
-  setting on to use both.
+- **"Camera released for ..." notifications during calls:** expected on Windows with camera sharing off.
+  Turn the setting on to use both.
 - **Hotkey doesn't work:** another app may own the combination (LookFocus says so when it starts). Pick
-  another `hotkey` in the config.
+  another `hotkey` in the config. On Linux, change it in System Settings > Keyboard > Shortcuts.
 - **"LookFocus is already running":** only one copy runs at a time. Look for its tray icon, including under
-  the **^** overflow.
-- **Logs:** `%APPDATA%\LookFocus\logs\lookfocus.log` (rotated at 1 MB, 3 kept). They're text only: state
+  the **^** overflow on Windows or the system tray's arrow on Plasma.
+- **Logs:** `%APPDATA%\LookFocus\logs\lookfocus.log` on Windows, `~/.config/lookfocus/logs/lookfocus.log` on
+  Linux (rotated at 1 MB, 3 kept). They're text only: state
   changes, the display you faced and the window that got focus, with titles cut to 40 characters. Set
   `"log_level": "DEBUG"` for more detail.
-- **Start over:** Quit, then delete `%APPDATA%\LookFocus` (config, calibration, logs).
+- **Start over:** Quit, then delete `%APPDATA%\LookFocus` or `~/.config/lookfocus` (config, calibration,
+  logs).
 
 ## Privacy: how it's enforced
 - Frames exist only in memory. Nothing in LookFocus writes images to disk or the log.
 - No network at runtime. mediapipe is pinned to 0.10.33, because later releases include a usage-telemetry
   uploader (`DECISIONS.md` D-003). At startup LookFocus refuses to start face tracking if the mediapipe native
-  library links any network API or the face model's SHA-256 is wrong. `tools\net_audit.py` (or
-  `--pid N` for a running copy) records any real connection.
-- No hooks and no key identities: typing is inferred from `GetLastInputInfo` (some input happened) versus the
-  pointer position and mouse-button state.
+  library links any network API or the face model's SHA-256 is wrong (on Linux: any network symbol or
+  library). `tools\net_audit.py` (or `--pid N` for a running copy) records any real connection, on both
+  systems.
+- No hooks and no key identities. On Windows, typing is inferred from `GetLastInputInfo` (some input happened)
+  versus the pointer position and mouse-button state. On Linux, from Wayland's idle notification versus the
+  pointer position KWin reports; LookFocus never opens `/dev/input`. The Linux UI uses no Qt network module
+  (a test checks).
 
 ## Resource use
-On the test machine (ThinkPad X9 15, 15 fps, face in view): 6–8% of total CPU and about 200 MB of memory
-(working set; ~270 MB committed), mostly mediapipe and OpenCV. With no face in view about 1% CPU; while paused
-none, and the camera is off.
+On the test machine (ThinkPad X9 15, 15 fps, face in view, Windows 11): 6–8% of total CPU and about 200 MB of
+memory (working set; ~270 MB committed), mostly mediapipe and OpenCV. With no face in view about 1% CPU; while
+paused none, and the camera is off. On Linux (same laptop, Fedora) the no-face figure measured 1.5%.
 
 ## Known limitations
 - **Head pose, not eye gaze.** You have to turn your head; eye-only glances aren't detected. This is by
@@ -229,13 +243,13 @@ none, and the camera is off.
 - **Calibration is tied to the camera:** its position and its resolution mode (the camera-sharing setting).
 - **Scrolling with the mouse wheel counts as typing** (no pointer movement): it only lengthens the next
   dwell to 1 s.
-- **Activation side effects.** Windows refuses focus requests from background programs, so LookFocus
+- **Activation side effects (Windows).** Windows refuses focus requests from background programs, so LookFocus
   escalates. When a plain request is refused, it attaches to the input of the target's thread, then sends
   an unassigned virtual key tap, and as a last resort an Alt tap, which can flash an app's menu bar (turn
   off with `allow_alt_fallback`). On the test machine, Win32 apps (Explorer, VS Code, Terminal, Firefox)
   and Store apps (Calculator, Settings) all switched without reaching the Alt stage. The secure desktop
   (UAC prompts, the lock screen) can never be focused.
-- **Elevated windows** need `--elevated`; see above. UIAccess isn't used.
+- **Elevated windows** (Windows) need `--elevated`; see above. UIAccess isn't used.
 - **One face.** If someone else is closer to the camera, LookFocus may follow them.
 - **Untested (one-monitor development machine):**
   - two or more physical monitors, especially with **different DPI scaling** or **different
@@ -246,14 +260,18 @@ none, and the camera is off.
     to pause and ask for recalibration);
   - external USB cameras, DirectShow-only cameras, several cameras at once;
   - Windows 10;
-  - full-screen games and other exclusive-mode apps.
+  - full-screen games and other exclusive-mode apps;
+  - on Linux: Plasma versions other than 6.8, USB webcams, several monitors.
+
+  On Linux, mouse buttons aren't seen (that would mean reading input devices), so a click that doesn't move
+  the pointer counts as typing.
 
   Monitor layout, DPI handling and window-to-display mapping are unit-tested with synthetic layouts. Zone
   mode on one real monitor is tested end to end.
 
 ## Standalone build
-The release zip is built from source with PyInstaller (a one-folder build, no installer). From a source
-install:
+The release zip (Windows) is built from source with PyInstaller (a one-folder build, no installer). From a
+source install:
 ```powershell
 .venv\Scripts\python.exe -m pip install -r requirements-build.lock
 .venv\Scripts\python.exe tools\build_exe.py
@@ -290,18 +308,22 @@ The executables are **unsigned**:
   it, add an exclusion for the folder or run from source instead.
 
 ## Uninstall
-1. Untick **Start with Windows** (or delete the `LookFocus` value under
-   `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`).
+1. Untick **Start with Windows** or **Start at login** (or delete it by hand: on Windows the `LookFocus` value
+   under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, on Linux
+   `~/.config/autostart/lookfocus.desktop`).
 2. **Quit**.
-3. Delete the LookFocus folder (the unzipped download, or the source folder) and `%APPDATA%\LookFocus`.
-   Nothing else was installed.
+3. Delete the LookFocus folder (the unzipped download, or the source folder) and its settings folder,
+   `%APPDATA%\LookFocus` or `~/.config/lookfocus`. Nothing else was installed.
 
 ## Development
+Windows (PowerShell):
 ```powershell
 .venv\Scripts\python.exe -m pytest                 # unit tests, hardware-free (includes privacy checks)
 .venv\Scripts\python.exe -m ruff check .
 .venv\Scripts\python.exe -m ruff format --check .
 ```
+Linux: the same with `.venv-linux/bin/python` in place of `.venv\Scripts\python.exe`.
+
 Tools:
 - `tools\cam_probe.py`: cameras, backends and open latency.
 - `tools\debug_pose.py [--guided]`: live head-pose viewer with its own camera.
@@ -311,12 +333,12 @@ Tools:
 - `python -m lookfocus.camera_activity`: which processes use the camera.
 
 Layout: `src/lookfocus/`. The pure, unit-tested logic (pose, displays, calibration, classifier, decision,
-input tracker, targeting, config, camera-usage policy) is separate from the Windows parts (capture,
-monitors, overlay, focus, tray, system events) and their Linux counterparts in `src/lookfocus/linux/`;
-`backend.py` picks one set. On Linux, run the same checks with `.venv-linux/bin/python -m pytest` (and
-`ruff`); `tools/net_audit.py` and `tools/debug_pose.py` work there too. `CLAUDE.md` has the conventions; `DECISIONS.md` has the why
-and the measurements behind every choice. mediapipe must stay at 0.10.33; after any dependency change run
-pytest and `tools\net_audit.py`.
+input tracker, targeting, config, camera-usage policy) is separate from the Windows parts (capture, monitors,
+overlay, focus, tray, system events) and their Linux counterparts in `src/lookfocus/linux/`; `backend.py`
+picks one set. `tools/net_audit.py` and `tools/debug_pose.py` work on Linux too; the other tools are Windows
+only. CI runs the tests on both systems. `CLAUDE.md` has the conventions; `DECISIONS.md` has the why and the
+measurements behind every choice. mediapipe must stay at 0.10.33; after any dependency change run pytest and
+`tools\net_audit.py`.
 
 The README video was made with the `/brag` skill (Hyperframes). Its source lives in `brag-output/`, which is
 not committed (it holds a copy of the music track).

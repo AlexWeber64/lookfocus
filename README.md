@@ -7,12 +7,15 @@
 
 <p align="center">
 LookFocus notices which screen you're facing and puts your keyboard there. No reaching for the mouse,
-no clicking a window first. It runs quietly in the Windows tray and never goes online.
+no clicking a window first. It runs quietly in the tray on Windows and Linux (KDE Plasma), and never goes
+online.
 </p>
 
 https://github.com/user-attachments/assets/0295cb76-d3d4-469d-89f0-e83276c6f65d
 
-<p align="center"><a href="https://github.com/AlexWeber64/lookfocus/releases/latest"><b>Download for Windows 11</b></a></p>
+<p align="center"><a href="https://github.com/AlexWeber64/lookfocus/releases/latest"><b>Download for Windows 11</b></a>
+&nbsp;·&nbsp;
+<a href="docs/GUIDE.md#linux-kde-plasma"><b>Install on Linux (KDE Plasma)</b></a></p>
 
 ---
 
@@ -54,8 +57,8 @@ the right. Turning back brings you back to exactly where you were typing.
 **It gets out of the way.**
 - Pause any time with **Ctrl+Alt+Shift+G**, or by clicking the tray icon.
 - It pauses by itself (and turns the camera off) when you lock the PC, it sleeps, or the screen turns off.
-- On a video call it hands the camera over and picks up again afterwards, or both run side by side if Windows
-  allows (see the FAQ).
+- On a video call it hands the camera over and picks up again afterwards, or both run side by side where the
+  system allows it (always on Linux; see the FAQ).
 
 **It's private.**
 - Camera images stay in memory: never saved, never sent anywhere. Each frame becomes three head angles and is
@@ -68,7 +71,10 @@ eight strips) as separate "screens".
 
 ## Get started
 
-You'll need Windows 11 and a webcam in front of you (the built-in laptop camera is fine).
+You'll need Windows 11 or Linux with KDE Plasma 6 (Wayland), and a webcam in front of you (the built-in laptop
+camera is fine).
+
+### Windows
 
 1. Download **LookFocus-1.0.0-win64.zip** from the
    [latest release](https://github.com/AlexWeber64/lookfocus/releases/latest).
@@ -82,6 +88,20 @@ You'll need Windows 11 and a webcam in front of you (the built-in laptop camera 
 
 That's it: look at a screen and type. The LookFocus icon lives in the tray (it may hide under the **^** arrow
 at first). Right-click it and tick **Start with Windows** if you want it around every day.
+
+### Linux (KDE Plasma)
+
+There's no download for Linux yet: you install it from source with a few commands, which take a couple of
+minutes. The [Linux section of the guide](docs/GUIDE.md#linux-kde-plasma) has them. Then:
+
+1. Start LookFocus. Its icon appears in the system tray.
+2. Say **Yes** to the welcome message and look at each dot, just as on Windows.
+3. Right-click the icon and tick **Start at login** if you want it around every day.
+
+It works the same way as on Windows, with one difference: Wayland doesn't let any app move the mouse
+pointer, so the `move_cursor_on_switch` setting does nothing there.
+
+### Either way
 
 **Only one monitor?** The welcome message offers to split it into a left and a right half that work like two
 screens. You can change this any time under **Screen zones** in the tray menu.
@@ -99,7 +119,7 @@ Developers can also [run it from source or build the exe themselves](docs/GUIDE.
 | <img src="docs/media/icon-error.png" width="24" alt="red exclamation mark"> | Needs you. Hover over it to see why (usually: calibrate). |
 
 Right-click for **Pause**, **Recalibrate**, **Screen zones**, **Choose camera**, **Debug view** (see what
-LookFocus sees), **Open config**, **Start with Windows** and **Quit**.
+LookFocus sees), **Open config**, **Start with Windows** (**Start at login** on Linux) and **Quit**.
 
 ## Getting the best results
 
@@ -140,22 +160,24 @@ No. Images are processed in memory and thrown away immediately. LookFocus never 
 startup it checks its face-tracking library and model, and refuses to run a version that could phone home.
 
 **Is it a keylogger?**
-No. It uses the same "was there any input recently" signal Windows uses for idle timers. It never sees which
-keys you press.
+No. It uses the same "was there any input recently" signal the system uses to dim the screen when you're
+away (on Windows, the idle timer; on Linux, Wayland's idle notification). It never sees which keys you press.
 
 **What happens on a video call?**
-Normally only one app can use the camera, so LookFocus steps aside when a call starts and comes back when it
-ends. It tells you when it does. On recent Windows 11 versions you can turn on *"Allow multiple apps to use
-camera at the same time"*, and then both work together. Tray menu → **Camera sharing...** checks it for you.
+On Linux, nothing: the camera is shared, so the call and LookFocus both use it at once.
+On Windows, normally only one app can use the camera, so LookFocus steps aside when a call starts and comes
+back when it ends. It tells you when it does. On recent Windows 11 versions you can turn on *"Allow multiple
+apps to use camera at the same time"*, and then both work together. Tray menu → **Camera sharing...** checks
+it for you.
 
 **Will it steal focus while I'm typing?**
 It waits longer while you type and never switches while you use the mouse. It only acts when you clearly look
 at another screen.
 
 **Some windows won't let it switch away. Why?**
-Windows protects programs running as administrator (Task Manager, for example). LookFocus can switch *to* them
-but not *away* from them, and tells you once. If you live in admin windows, right-click LookFocus.exe and
-choose **Run as administrator**.
+This happens on Windows only. Windows protects programs running as administrator (Task Manager, for
+example). LookFocus can switch *to* them but not *away* from them, and tells you once. If you live in admin
+windows, right-click LookFocus.exe and choose **Run as administrator**.
 
 **Windows or my antivirus warns about LookFocus.exe. Is it safe?**
 The app isn't signed by a company (that costs money every year), and it's packed with a common Python tool
@@ -167,22 +189,25 @@ repository, so you can read the code, build the exe yourself, or run it from sou
 On the test laptop it uses about 6-8% of the processor while it sees you, about 1% when you're away, and
 nothing while paused.
 
-**Mac or Linux? Windows 10?**
-On Linux, LookFocus runs on KDE Plasma 6 (Wayland), installed from source for now: see
-[Linux in the guide](docs/GUIDE.md#linux-kde-plasma). No Mac version. Windows 10 might work but hasn't been
-tested.
+**Which systems does it run on?**
+Windows 11, and Linux with KDE Plasma 6 on Wayland (installed from source for now: see
+[Linux in the guide](docs/GUIDE.md#linux-kde-plasma)). Other Linux desktops, such as GNOME, aren't supported,
+because on Wayland only the desktop itself may move keyboard focus, and LookFocus talks to KDE's. No Mac
+version. Windows 10 might work but hasn't been tested.
 
 **How do I get rid of it?**
-Untick **Start with Windows**, choose **Quit**, then delete the LookFocus folder and `%APPDATA%\LookFocus`.
-Nothing else was installed.
+Untick **Start with Windows** (or **Start at login**), choose **Quit**, then delete the LookFocus folder and
+its settings folder: `%APPDATA%\LookFocus` on Windows, `~/.config/lookfocus` on Linux. Nothing else was
+installed.
 
 ## Good to know
 
 - It picks the **screen**, not a window within a screen. Split panes on one screen are up to you.
 - If the camera or a monitor moves, it needs a fresh calibration.
-- It has been tested on one laptop with one monitor split into zones. **Setups with several real monitors
-  haven't been tested yet**, especially monitors with different scaling or resolutions, stacked or
-  portrait monitors, docking and undocking, external USB cameras, and Windows 10. Feedback welcome.
+- It has been tested on one laptop with one monitor split into zones, on Windows 11 and on Fedora with KDE
+  Plasma 6. **Setups with several real monitors haven't been tested yet**, especially monitors with
+  different scaling or resolutions, stacked or portrait monitors, docking and undocking, external USB
+  cameras, and Windows 10. Feedback welcome.
 
 The full list, with details, is in the [guide](docs/GUIDE.md#known-limitations).
 
@@ -198,12 +223,12 @@ The full list, with details, is in the [guide](docs/GUIDE.md#known-limitations).
 
 LookFocus is free software, licensed under the [GNU General Public License v3.0](LICENSE). You may use, study,
 share and change it; if you distribute a modified version, it has to stay under the same license with its
-source code available. The libraries bundled with the download keep their own licenses (listed in its
+source code available. The libraries it uses keep their own licenses (the Windows download lists them in its
 `third-party-licenses` folder).
 
 ## Credits
 
 The idea comes from [Glance Switch](https://glanceswitch.com/), which does this on macOS. LookFocus is an
-independent Windows implementation written from scratch and isn't affiliated with it. Face tracking uses
-Google's [MediaPipe](https://ai.google.dev/edge/mediapipe); the libraries bundled with the download are listed
-with their licenses in its `third-party-licenses` folder.
+independent implementation for Windows and Linux, written from scratch, and isn't affiliated with it. Face
+tracking uses Google's [MediaPipe](https://ai.google.dev/edge/mediapipe); the libraries bundled with the
+Windows download are listed with their licenses in its `third-party-licenses` folder.

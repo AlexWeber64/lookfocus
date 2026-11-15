@@ -1,6 +1,6 @@
 # LookFocus: working notes for Claude
 
-Tray app for Windows and (branch `linux`) KDE Plasma on Wayland: webcam head pose → which monitor (or zone)
+Tray app for Windows and Linux (KDE Plasma 6 on Wayland): webcam head pose → which monitor (or zone)
 you face → move keyboard focus to the last-used window there. Spec milestones M0–M6; decisions and evidence
 live in `DECISIONS.md` (Linux port: D-050 to D-055).
 
@@ -88,10 +88,11 @@ py -3.12 -m venv .venv
 - `README.md` is the friendly landing page (plain language, no internals); details go in `docs/GUIDE.md`.
   `docs/media/` holds the README video/GIF and tray-icon PNGs (exported from `tray.make_icon`).
   `brag-output/` (gitignored) is the `/brag` Hyperframes project that renders the video.
-- `tests/`: pytest; hardware-free except for Windows-only checks that skip elsewhere
+- `tests/`: pytest; hardware-free except for platform-only checks that skip elsewhere. CI runs them on Windows
+  and Linux.
 - `models/face_landmarker.task`: committed, sha256-checked (see `models/SOURCE.md`)
 - User data: `%APPDATA%\LookFocus\` (config.json, calibration.json, logs); Linux: `~/.config/lookfocus/`
 
 ## Conventions
 - Python 3.12, ruff (line length 110), type hints, dataclasses for plain records.
-- Comments explain *why* (Windows quirks, measured behaviour), not what.
+- Comments explain *why* (Windows and KDE/Wayland quirks, measured behaviour), not what.

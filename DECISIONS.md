@@ -1107,3 +1107,21 @@ history. This replaces the GitLab-only part of D-048.
   (`github.com/user-attachments/...`), which needs the web UI. The user uploaded `docs/media/lookfocus-demo.mp4`
   that way, and the README embeds that URL on a line of its own, so GitHub shows a player with sound. On the
   GitLab mirror the same line is a plain link. The GIF stays in `docs/media/` for sharing.
+
+### D-057 Windows and Linux everywhere it is user-facing **[done: README, guide, About line, video, share images]**
+With the Linux port (D-050), every place that described LookFocus as a Windows app now names both systems.
+- **README:** tagline, an "Install on Linux (KDE Plasma)" link next to the Windows download, a Linux part in
+  "Get started", and the FAQ answers (idle signal, video calls, admin windows, uninstall, which systems)
+  split by system. **Guide:** requirements, settings marked Windows-only where they are, config, log and
+  uninstall paths for both, camera sharing on Linux, the Linux privacy mechanisms, the Linux CPU figure.
+- **Left as they are on purpose:** code comments about real Win32 behaviour, the `README.txt` inside the
+  Windows zip (it gains one line pointing to Linux), and the v1.0.0 release notes (that release was
+  Windows only).
+- **GitHub About line and topics** name Windows and Linux (KDE Plasma).
+- **Demo video:** only the closing footer changed, to "Windows 11 · Linux (KDE Plasma) · runs offline".
+  Re-rendered on Fedora with the original fonts (Segoe UI, Segoe UI Semibold and Cascadia Mono, copied from
+  the Windows partition into the uncommitted `brag-output/`, so the render matches the Windows one). Fedora's
+  ffmpeg has no x264, so it was rendered to WebM and converted with openh264 (3 Mbit/s), with the original
+  AAC audio track copied unchanged. The GIF covers only the first 7.8 s, before the footer, and is unchanged.
+- **Share images** (`brag-output/images`, uncommitted): the same wording, test count 379, the focus step
+  names KWin, and GitLab URLs and file names changed to GitHub.

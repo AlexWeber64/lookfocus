@@ -5,8 +5,8 @@ samples are reduced to a robust median (MAD outlier rejection). Medians are stor
 estimator, so switching pose_source in config doesn't need a recalibration.
 
 Pure logic + JSON persistence; the overlay/capture driving it lives in overlay.py / main.py.
-Stored at %APPDATA%\\LookFocus\\calibration.json, keyed by logical-display id (monitor device path,
-resolution, position, and zone).
+Stored at %APPDATA%\\LookFocus\\calibration.json (Linux: ~/.config/lookfocus), keyed by logical-display id
+(monitor device path, resolution, position, and zone).
 """
 
 from __future__ import annotations

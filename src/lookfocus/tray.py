@@ -92,7 +92,8 @@ def make_icon(state: str, size: int = 64) -> Image.Image:
 
 
 def setup_logging(level: str) -> Path:
-    """Rotating log in %APPDATA%\\LookFocus\\logs (text only: no images, no keystrokes are ever logged)."""
+    """Rotating log in %APPDATA%\\LookFocus\\logs or ~/.config/lookfocus/logs (text only: no images, no
+    keystrokes are ever logged)."""
     log_dir = paths.data_dir() / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     path = log_dir / "lookfocus.log"

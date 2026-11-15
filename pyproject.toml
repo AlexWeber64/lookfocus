@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "lookfocus"
 version = "1.0.0"
-description = "Tray app for Windows and KDE Plasma (Linux): move keyboard focus to the monitor you are facing, using the webcam."
+description = "Tray app for Windows and Linux (KDE Plasma): move keyboard focus to the monitor you are facing, using the webcam."
 license = "GPL-3.0-only"
 license-files = ["LICENSE"]
 requires-python = "==3.12.*"
