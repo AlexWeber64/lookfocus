@@ -25,7 +25,7 @@ Requirements:
 - A colour webcam roughly in front of you. A Windows Hello IR camera is detected and skipped automatically.
 
 **Download (recommended):** get `LookFocus-<version>-win64.zip` from the
-[releases page](https://gitlab.com/AlexWeber64/lookfocus/-/releases), unzip it anywhere and
+[releases page](https://github.com/AlexWeber64/lookfocus/releases), unzip it anywhere and
 double-click `LookFocus.exe`; see the [README](../README.md#get-started). The folder also has
 `lookfocus-cli.exe` for the commands below (`lookfocus-cli calibrate --zones 2`, `lookfocus-cli run`, ...)
 and a `README.txt`. It needs about 225 MB and no Python.

@@ -68,9 +68,9 @@ py -3.12 -m venv .venv
 # release build (the main way people get LookFocus, D-047): dist\LookFocus\ + dist\LookFocus-<v>-win64.zip, unsigned
 .venv\Scripts\python.exe -m pip install -r requirements-build.lock
 .venv\Scripts\python.exe tools\build_exe.py
-# publish (GitLab, D-048/D-049): upload zip + .sha256 to the generic package registry (glab api --method PUT
-#   projects/87333566/packages/generic/lookfocus/<v>/<file> --input <file>), tag vX.Y.Z, then glab release create
-#   with --assets-links (link_type package, direct_asset_path /LookFocus-win64.zip). Confirm with the user first.
+# publish (GitHub, D-056): tag vX.Y.Z, push the tag to both hosts, then gh release create vX.Y.Z with the zip and
+#   its .sha256 as assets (GH_TOKEN=$(gh auth token --hostname github.com --user AlexWeber64)). GitLab is a mirror
+#   (same history, no release binaries). Confirm with the user first.
 ```
 
 ## Layout
