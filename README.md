@@ -11,7 +11,7 @@ no clicking a window first. It runs quietly in the tray on Windows and Linux (KD
 online.
 </p>
 
-https://github.com/user-attachments/assets/0295cb76-d3d4-469d-89f0-e83276c6f65d
+https://github.com/user-attachments/assets/ad6683b8-3a4a-4652-94ce-5f5b8bca2893
 
 <p align="center"><a href="https://github.com/AlexWeber64/lookfocus/releases/latest"><b>Download for Windows 11</b></a>
 &nbsp;·&nbsp;
