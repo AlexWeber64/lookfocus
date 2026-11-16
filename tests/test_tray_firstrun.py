@@ -3,7 +3,7 @@ import sys
 
 import pytest
 
-pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="tray app is Windows-only")
+pytestmark = pytest.mark.skipif(sys.platform not in ("win32", "linux"), reason="tray app: Windows and Linux")
 
 
 def _app(tmp_path, monkeypatch, answer=None):

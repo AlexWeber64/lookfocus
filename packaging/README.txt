@@ -5,6 +5,7 @@ Look at a monitor and just type. LookFocus notices which screen you're facing (t
 puts your keyboard there. It runs in the Windows tray and never goes online.
 
 Project page, source code and updates: https://github.com/AlexWeber64/lookfocus
+LookFocus also runs on Linux with KDE Plasma 6; the project page explains how to install it there.
 
 
 START

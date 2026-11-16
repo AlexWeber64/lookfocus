@@ -9,9 +9,10 @@ import pytest
 
 from lookfocus import paths
 
-pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="tray app is Windows-only")
+windows_only = pytest.mark.skipif(sys.platform != "win32", reason="Windows launcher names")
 
 
+@windows_only
 def test_app_command_from_source(monkeypatch, tmp_path):
     for name in ("python.exe", "pythonw.exe"):
         (tmp_path / name).write_bytes(b"")
@@ -22,6 +23,7 @@ def test_app_command_from_source(monkeypatch, tmp_path):
     assert paths.app_command("run", console=True)[0] == str(tmp_path / "python.exe")
 
 
+@windows_only
 def test_app_command_frozen(monkeypatch, tmp_path):
     for name in ("LookFocus.exe", "lookfocus-cli.exe"):
         (tmp_path / name).write_bytes(b"")
@@ -33,6 +35,16 @@ def test_app_command_frozen(monkeypatch, tmp_path):
         "run",
         "--stats",
     ]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Linux launcher")
+def test_app_command_linux(monkeypatch, tmp_path):
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "python"))
+    assert paths.app_command("tray") == [str(tmp_path / "python"), "-m", "lookfocus", "tray"]
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "lookfocus"))
+    assert paths.app_command("tray", console=True) == [str(tmp_path / "lookfocus"), "tray"]
 
 
 class _FakeSlot:

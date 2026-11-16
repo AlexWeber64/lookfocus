@@ -1,4 +1,4 @@
-"""User configuration: %APPDATA%\\LookFocus\\config.json.
+"""User configuration: %APPDATA%\\LookFocus\\config.json (Windows), ~/.config/lookfocus/config.json (Linux).
 
 Pure logic (no Win32): defaults, per-field validation, load/save, hotkey parsing. A bad value never stops
 LookFocus: it falls back to the default and the problem is reported (tray notification + log). Unknown keys
@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
-BACKENDS = ("msmf", "dshow")
+# Camera backends per platform; the first is the default (Linux: D-050).
+BACKENDS = ("msmf", "dshow") if sys.platform == "win32" else ("pipewire", "v4l2")
 POSE_SOURCES = ("matrix", "lm3d", "lm2d")
 
 
@@ -31,7 +33,7 @@ class Config:
     allow_alt_fallback: bool = True
     # camera
     fps: float = 15.0
-    camera_backend: str = "msmf"
+    camera_backend: str = BACKENDS[0]
     camera_index: int | None = None  # None = automatic (or by path/name below)
     camera_name: str = ""
     camera_path: str = ""
@@ -198,3 +200,37 @@ def _hotkey_error(text: str) -> str | None:
         return None
     except ValueError as e:
         return f"is not a valid hotkey ({e})"
+
+
+# KDE (Qt) key names for the named keys above; letters, digits and F-keys keep their names.
+_KDE_KEYS = {
+    "space": "Space",
+    "pause": "Pause",
+    "scrolllock": "ScrollLock",
+    "insert": "Ins",
+    "delete": "Del",
+    "home": "Home",
+    "end": "End",
+    "pageup": "PgUp",
+    "pagedown": "PgDown",
+    "left": "Left",
+    "up": "Up",
+    "right": "Right",
+    "down": "Down",
+    "esc": "Esc",
+    "escape": "Esc",
+    "tab": "Tab",
+    "enter": "Return",
+    "backspace": "Backspace",
+}
+_KDE_MODS = {"ctrl": "Ctrl", "control": "Ctrl", "alt": "Alt", "shift": "Shift", "win": "Meta"}
+
+
+def kde_key_sequence(text: str) -> str:
+    """ "ctrl+alt+shift+g" -> "Ctrl+Alt+Shift+G" (KDE global shortcut syntax). Raises ValueError."""
+    parse_hotkey(text)
+    *mods, key = [p.strip().lower() for p in text.split("+") if p.strip()]
+    order = ["Ctrl", "Alt", "Shift", "Meta"]
+    names = sorted({_KDE_MODS[m] for m in mods}, key=order.index)
+    key_name = _KDE_KEYS.get(key) or key.upper()
+    return "+".join([*names, key_name])

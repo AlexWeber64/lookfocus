@@ -7,7 +7,7 @@ import pytest
 from lookfocus import privacy
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="mediapipe native lib is a Windows DLL here")
+@pytest.mark.skipif(sys.platform not in ("win32", "linux"), reason="PE / ELF only")
 def test_mediapipe_native_libs_link_no_network_api():
     libs = privacy.mediapipe_native_libs()
     assert libs, "mediapipe native library not found; is mediapipe installed?"
@@ -27,6 +27,24 @@ def test_pe_parser_detects_network_import():
     if not urlmon.exists():
         pytest.skip("urlmon.dll not available")
     assert "wininet.dll" in privacy.pe_imported_dlls(urlmon.read_bytes())
+
+
+def test_elf_parser_detects_network_imports():
+    # Real system library known to talk to the network: libcurl calls connect() and links TLS.
+    from pathlib import Path
+
+    curl = next(
+        (
+            p
+            for d in ("/usr/lib64", "/usr/lib/x86_64-linux-gnu", "/usr/lib")
+            for p in Path(d).glob("libcurl.so.4*")
+        ),
+        None,
+    )
+    if curl is None:
+        pytest.skip("libcurl not available")
+    hits = privacy.network_imports(curl.read_bytes())
+    assert "connect" in hits or any(h.startswith("SSL_") for h in hits)
 
 
 def test_model_file_matches_recorded_hash():

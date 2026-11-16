@@ -7,7 +7,7 @@ Never installs hooks and never reads which key was pressed. Every ~40 ms it read
 Keyboard activity is *inferred*: input that happened after the mouse was last touched. Known blind spot:
 mouse-wheel scrolling moves no pointer, so it reads as typing (that only lengthens the dwell).
 
-InputTracker is pure (unit tested); InputPoller is the Windows thread feeding it.
+InputTracker is pure (unit tested); InputPoller is the Windows thread feeding it (Linux: linux/input.py).
 """
 
 from __future__ import annotations
@@ -37,8 +37,9 @@ class InputState:
 
 
 class InputTracker:
-    def __init__(self, move_threshold_px: int = MOVE_THRESHOLD_PX) -> None:
+    def __init__(self, move_threshold_px: int = MOVE_THRESHOLD_PX, slack_s: float = SLACK_S) -> None:
         self.move_threshold = move_threshold_px
+        self.slack_s = slack_s  # Linux uses more: its pointer reports are throttled (linux/input.py)
         self._cursor: tuple[int, int] | None = None
         self._touched_at = float("-inf")  # any pointer change or button, including jitter
         self._mouse_at = float("-inf")
@@ -72,7 +73,7 @@ class InputTracker:
         if last_input > self._input_seen + NEW_INPUT_EPS_S:  # a new input event since the last poll
             self._input_seen = last_input
             injected = self._ignore_from <= last_input <= self._ignore_until
-            if not injected and last_input > self._touched_at + SLACK_S:
+            if not injected and last_input > self._touched_at + self.slack_s:
                 self._key_at = last_input
         return InputState(self._mouse_at, self._key_at)
 

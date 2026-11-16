@@ -1,6 +1,7 @@
 """Interactive calibration: show dots on each logical display in turn and record head pose.
 
-Drives overlay.Overlay (on the calling thread) and reads poses from a running CaptureThread's LatestSlot.
+Drives the platform's Overlay (overlay.py, linux/overlay.py) and reads poses from a running
+CaptureThread's LatestSlot.
 For each display: 5 dots (calibration.POINTS). Each dot is shown for ~0.9 s to settle, then samples are
 collected for 2 s. A dot is retried if too few frames had a face, or if the head wasn't still.
 """
@@ -14,8 +15,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from lookfocus import backend
 from lookfocus import calibration as C
-from lookfocus import overlay as O
 from lookfocus.capture import LatestSlot
 from lookfocus.classifier import Classifier
 from lookfocus.displays import LogicalDisplay
@@ -47,7 +48,7 @@ class Calibrator:
     def __init__(
         self,
         slot: LatestSlot[PoseSample],
-        overlay: O.Overlay,
+        overlay,
         settings: CalibratorSettings,
         say: Callable[[str], None] = print,
         *,
@@ -55,13 +56,14 @@ class Calibrator:
         focus: Callable[[int], object] | None = None,
     ) -> None:
         self.slot, self.ov, self.s, self.say = slot, overlay, settings, say
+        self.O = backend.overlay()
         self.cancel_hint = cancel_hint
         self.focus = focus  # brings the overlay to the foreground so Esc reaches it (tray: no terminal)
         self.frames: dict[tuple[int, int], int] = {}  # native camera frame sizes seen while collecting
 
     def _show(self, rect) -> None:
         self.ov.show(rect)
-        if self.focus is not None:
+        if self.focus is not None and self.ov.hwnd is not None:
             self.focus(self.ov.hwnd)
 
     def _pump(self, seconds: float) -> None:
@@ -86,7 +88,7 @@ class Calibrator:
                 ],
             )
             self._pump(0.2)
-        raise TimeoutError("no face seen; check the camera (tools\\debug_pose.py) and lighting")
+        raise TimeoutError("no face seen; check the camera (the tray's Debug view) and lighting")
 
     def collect(
         self, display: LogicalDisplay, index: int, name: str, fx: float, fy: float, total: int
@@ -94,14 +96,18 @@ class Calibrator:
         head = f"{display.short}: dot {index}/{total}"
         hint = "Look at the dot, turning your head naturally, as you would when working here."
         for attempt in range(self.s.retries + 1):
-            self.ov.set_scene(dot=(fx, fy), color=O.WAITING, title=head, lines=[hint], progress=0.0)
+            self.ov.set_scene(dot=(fx, fy), color=self.O.WAITING, title=head, lines=[hint], progress=0.0)
             self._pump(self.s.settle_s)
             samples: list[dict[str, tuple[float, float]]] = []
             seen, _ = self.slot.get()
             t0 = time.monotonic()
             while (el := time.monotonic() - t0) < self.s.collect_s:
                 self.ov.set_scene(
-                    dot=(fx, fy), color=O.MEASURING, title=head, lines=[hint], progress=el / self.s.collect_s
+                    dot=(fx, fy),
+                    color=self.O.MEASURING,
+                    title=head,
+                    lines=[hint],
+                    progress=el / self.s.collect_s,
                 )
                 self._pump(0.03)
                 seq, sample = self.slot.get()

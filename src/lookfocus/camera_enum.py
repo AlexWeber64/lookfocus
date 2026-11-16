@@ -21,10 +21,12 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class CameraDevice:
-    backend: str  # "msmf" or "dshow"
-    index: int  # OpenCV index for that backend
+    backend: str  # "msmf" / "dshow" (Windows), "pipewire" / "v4l2" (Linux)
+    index: int  # OpenCV index for that backend (PipeWire: position in the camera list)
     name: str
-    path: str  # MF symbolic link / DirectShow DevicePath ("" if the driver exposes none)
+    # MF symbolic link / DirectShow DevicePath ("" if the driver exposes none); Linux: "pipewire:<node name>"
+    # or the /dev/v4l/by-path link
+    path: str
 
     @property
     def looks_ir(self) -> bool:
@@ -284,7 +286,12 @@ def _in_mta(fn):
 
 
 def list_cameras(backend: str) -> list[CameraDevice]:
-    """Devices for backend "msmf" or "dshow", in OpenCV index order. Empty list on failure."""
+    """Devices for a backend ("msmf"/"dshow" on Windows, "pipewire"/"v4l2" on Linux), in the order the
+    backend indexes them. Empty list on failure."""
+    if backend in ("pipewire", "v4l2"):
+        from lookfocus.linux.camera import list_cameras as linux_cameras
+
+        return linux_cameras(backend)
     fn = {"msmf": _enum_msmf, "dshow": _enum_dshow}[backend]
     return _in_mta(fn)
 

@@ -1,6 +1,7 @@
 """Which window to focus on a logical display, and the activation escalation ladder.
 
-Pure logic: no Win32 imports. windows_focus.py supplies the real FocusApi; tests supply a fake.
+Pure logic: no Win32 imports. windows_focus.py (Linux: linux/focus.py) supplies the real FocusApi; tests
+supply a fake.
 
 Target selection: the window that was last active on the display (remembered by a foreground tracker)
 if it is still eligible and still on that display, else the topmost eligible window there (z-order).
@@ -28,7 +29,7 @@ VK_MENU = 0x12  # Alt
 
 @dataclass(frozen=True)
 class WindowInfo:
-    hwnd: int
+    hwnd: int | str  # Win32 HWND; on Linux the KWin window id (linux/windowlist.py)
     title: str
     cls: str
     pid: int
@@ -50,7 +51,7 @@ def display_of(w: WindowInfo, displays: list[LogicalDisplay]) -> LogicalDisplay 
 
 def choose_target(
     display: LogicalDisplay,
-    remembered: int | None,
+    remembered: int | str | None,
     windows: list[WindowInfo],
     displays: list[LogicalDisplay],
 ) -> WindowInfo | None:

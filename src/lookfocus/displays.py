@@ -59,7 +59,7 @@ class Rect:
 
 @dataclass(frozen=True)
 class Monitor:
-    """One physical monitor as Windows reports it."""
+    """One physical monitor as the system reports it (Windows, or KWin on Linux)."""
 
     device: str  # GDI device name, e.g. "\\\\.\\DISPLAY1" (can be renumbered)
     path: str  # monitor device path from QueryDisplayConfig (stable per monitor+port), or ""

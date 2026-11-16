@@ -16,6 +16,7 @@ Camera events (another app started using the camera, sharing probe results) are 
 terminal with the notification text the app will show.
 
 Usage: .venv\\Scripts\\python.exe tools\\debug_pose.py [--backend msmf|dshow] [--fps 15] [--guided]
+       .venv-linux/bin/python tools/debug_pose.py [--backend pipewire|v4l2]   (Linux: a Qt window)
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ import logging
 import math
 import os
 import statistics
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -36,6 +38,7 @@ import numpy as np
 from lookfocus import pose as P
 from lookfocus.camera_enum import CameraChoice
 from lookfocus.capture import CaptureSettings, CaptureThread, LatestSlot
+from lookfocus.config import BACKENDS
 
 WIN = "LookFocus debug pose"
 VIDEO_W, VIDEO_H = 640, 480
@@ -301,6 +304,33 @@ def draw_guide(canvas, guided: Guided, now: float) -> None:
     cv2.rectangle(canvas, (0, 84), (int(VIDEO_W * frac), 90), color, -1)
 
 
+class CvWindow:
+    """OpenCV HighGUI window (Windows). Linux uses linux/viewwindow.ImageWindow, with the same methods."""
+
+    def __init__(self, title: str) -> None:
+        self.title = title
+        cv2.namedWindow(title, cv2.WINDOW_AUTOSIZE)
+
+    def show(self, canvas: np.ndarray) -> None:
+        cv2.imshow(self.title, canvas)
+
+    def poll(self) -> tuple[int, bool]:
+        key = cv2.waitKey(1) & 0xFF
+        return key, cv2.getWindowProperty(self.title, cv2.WND_PROP_VISIBLE) < 1
+
+    def close(self) -> None:
+        cv2.destroyWindow(self.title)
+        cv2.waitKey(1)
+
+
+def make_window(title: str = WIN):
+    if sys.platform == "win32":
+        return CvWindow(title)
+    from lookfocus.linux.viewwindow import ImageWindow
+
+    return ImageWindow(title)
+
+
 def run_viewer(
     frames: LatestSlot,
     poses: LatestSlot,
@@ -318,7 +348,7 @@ def run_viewer(
     capture's PoseSample slot (for status while no frames flow). Returns when the window is closed, Q/Esc
     is pressed, `stop` is set or `seconds` elapse. Must run on one thread (HighGUI)."""
     canvas = np.zeros((VIDEO_H + PLOT_H, VIDEO_W + PANEL_W, 3), np.uint8)
-    cv2.namedWindow(WIN, cv2.WINDOW_AUTOSIZE)
+    window = make_window()
     cpu = CpuMeter()
     trace: collections.deque = collections.deque()
     guided: Guided | None = None
@@ -357,10 +387,9 @@ def run_viewer(
                     guided = None
                 else:
                     draw_guide(canvas, guided, now)
-            cv2.imshow(WIN, canvas)
+            window.show(canvas)
 
-            key = cv2.waitKey(1) & 0xFF
-            closed = cv2.getWindowProperty(WIN, cv2.WND_PROP_VISIBLE) < 1
+            key, closed = window.poll()
             if key in (ord("q"), 27) or closed or now > t_quit:
                 break
             if key == ord("m"):
@@ -374,13 +403,12 @@ def run_viewer(
             elif key != 255 and on_key is not None:
                 on_key(key)
     finally:
-        cv2.destroyWindow(WIN)
-        cv2.waitKey(1)
+        window.close()
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--backend", choices=["msmf", "dshow"], default="msmf")
+    ap.add_argument("--backend", choices=list(BACKENDS), default=BACKENDS[0])
     ap.add_argument("--no-fallback", action="store_true", help="don't try the other backend")
     ap.add_argument("--camera-index", type=int, default=None)
     ap.add_argument("--camera-name", default="")

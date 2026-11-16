@@ -17,10 +17,12 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 # lookfocus/__init__.py (always imported before this module) sets
 # OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS=0 before cv2 is loaded.
@@ -29,15 +31,24 @@ import numpy as np
 
 from lookfocus import camera_sharing, privacy
 from lookfocus import pose as posemath
-from lookfocus.camera_activity import SensorActivityMonitor, SensorDevice, process_name
 from lookfocus.camera_enum import CameraChoice, candidate_indices, device_key, list_cameras
 from lookfocus.camera_sharing import Sharing
 from lookfocus.camera_usage import ActivityPolicy, Others, busy_notice, friendly_app_name, yield_notice
+from lookfocus.config import BACKENDS as BACKEND_NAMES
 from lookfocus.paths import MODEL_PATH
 
-log = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from lookfocus.camera_activity import SensorDevice
+if sys.platform == "win32":
+    from lookfocus.camera_activity import SensorActivityMonitor, process_name
 
-BACKENDS: dict[str, int] = {"msmf": cv2.CAP_MSMF, "dshow": cv2.CAP_DSHOW}
+    BACKENDS: dict[str, int] = {"msmf": cv2.CAP_MSMF, "dshow": cv2.CAP_DSHOW}
+else:  # PipeWire through gst-launch (no cv2 backend id), or plain V4L2 (D-050)
+    from lookfocus.linux.camera import PIPEWIRE, SensorActivityMonitor, open_pipewire, process_name
+
+    BACKENDS = {"pipewire": PIPEWIRE, "v4l2": cv2.CAP_V4L2}
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -73,8 +84,12 @@ def open_camera(
     fps: float | None = None,
     timeout_s: float = 8.0,
 ) -> OpenResult:
-    """Open camera `index` with `backend` ("msmf"/"dshow"); never blocks longer than timeout_s."""
+    """Open camera `index` with `backend` (see BACKENDS); never blocks longer than timeout_s."""
     api = BACKENDS[backend]
+    if backend == "pipewire":
+        t0 = time.perf_counter()
+        cap, err = open_pipewire(index, width or 640, fps or CaptureSettings.fps, timeout_s)
+        return OpenResult(cap, backend, index, time.perf_counter() - t0, err)
     params = open_params(width, height, fps)
     lock = threading.Lock()
     state: dict = {"abandoned": False}
@@ -165,7 +180,7 @@ def motion(a: np.ndarray, b: np.ndarray) -> float:
 
 @dataclass(frozen=True)
 class CaptureSettings:
-    backend: str = "msmf"
+    backend: str = BACKEND_NAMES[0]
     fallback: bool = True  # try the other backend if nothing opens on `backend`
     camera: CameraChoice = field(default_factory=CameraChoice)
     width: int = 640
@@ -236,7 +251,14 @@ class CameraSource:
                 if dev is not None and dev.path:
                     self.tried_keys.add(device_key(dev.path))
                 label = f"{backend}:{idx} {dev.name if dev else '?'!r}"
-                res = open_camera(idx, backend, width=s.width, height=s.height, timeout_s=s.open_timeout_s)
+                res = open_camera(
+                    idx,
+                    backend,
+                    width=s.width,
+                    height=s.height,
+                    fps=self._open_fps(backend),
+                    timeout_s=s.open_timeout_s,
+                )
                 if not res.ok:
                     problems.append(f"{label}: {res.error}")
                     other_failures += 1
@@ -280,6 +302,11 @@ class CameraSource:
         # for other reasons, e.g. an OBS virtual camera with OBS closed, don't change that).
         self.busy = opened_without_frames > 0
         raise CameraError("; ".join(problems) or "no cameras found")
+
+    def _open_fps(self, backend: str) -> float | None:
+        """PipeWire cameras deliver up to 60 fps (measured); rate-limit them in the pipeline instead of
+        converting frames that are never processed. MSMF / DSHOW / V4L2 keep their native rate."""
+        return self.settings.fps if backend == "pipewire" else None
 
     def _verify(self, cap: cv2.VideoCapture) -> str:
         """A steady stream of real frames must arrive, and not from a greyscale (IR) sensor."""
@@ -560,12 +587,16 @@ class CaptureThread(threading.Thread):
             log.error("face tracker unavailable: %s", e)
             self._publish("error", message=f"face tracker unavailable: {e}")
             return
-        try:
-            self.sharing_available = camera_sharing.feature_available(camera_sharing.windows_build())
-        except OSError:
+        if sys.platform == "win32":
+            try:
+                self.sharing_available = camera_sharing.feature_available(camera_sharing.windows_build())
+            except OSError:
+                self.sharing_available = False
+            if not self.sharing_available:
+                self.sharing = Sharing.UNSUPPORTED
+        else:  # PipeWire shares the camera between apps; V4L2 has no such setting
             self.sharing_available = False
-        if not self.sharing_available:
-            self.sharing = Sharing.UNSUPPORTED
+            self.sharing = Sharing.ON if self.settings.backend == "pipewire" else Sharing.UNSUPPORTED
         monitor = None
         if self.settings.yield_to_other_apps:
             monitor = SensorActivityMonitor(self._on_activity)
